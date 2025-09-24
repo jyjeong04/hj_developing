@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         
-        cl::Device device = devices[1];
+        cl::Device device = devices[0];
 
         std::string name;
         getDeviceName(device, name);
@@ -233,75 +233,43 @@ int main(int argc, char *argv[]) {
         
         for(int i = 0; i < R_LENGTH; i++) {
             
-            try {
-                // b1: compute hash bucket number
-                b1_kernel.setArg(0, R_keys_buf);
-                b1_kernel.setArg(1, hash_values_buf);
-                b1_kernel.setArg(2, bucket_ids_buf);
-                b1_kernel.setArg(3, (uint32_t)R_LENGTH);
-                
-                queue.enqueueNDRangeKernel(b1_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 10 == 0) std::cout << "b1 completed for R[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in b1 kernel at R[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            // b1: compute hash bucket number
+            b1_kernel.setArg(0, R_keys_buf);
+            b1_kernel.setArg(1, hash_values_buf);
+            b1_kernel.setArg(2, bucket_ids_buf);
+            b1_kernel.setArg(3, (uint32_t)R_LENGTH);
             
-            try {
-                // b2: update bucket header
-                b2_kernel.setArg(0, bucket_ids_buf);
-                b2_kernel.setArg(1, bucket_totalNum_buf);
-                b2_kernel.setArg(2, (uint32_t)R_LENGTH);
-                
-                queue.enqueueNDRangeKernel(b2_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 10 == 0) std::cout << "b2 completed for R[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in b2 kernel at R[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            queue.enqueueNDRangeKernel(b1_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
             
-            try {
-                // b3: manage key lists
-                b3_kernel.setArg(0, R_keys_buf);
-                b3_kernel.setArg(1, bucket_ids_buf);
-                b3_kernel.setArg(2, bucket_keys_buf);
-                b3_kernel.setArg(3, bucket_key_counts_buf);
-                b3_kernel.setArg(4, key_indices_buf);
-                b3_kernel.setArg(5, (uint32_t)R_LENGTH);
-                
-                queue.enqueueNDRangeKernel(b3_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 10 == 0) std::cout << "b3 completed for R[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in b3 kernel at R[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            // b2: update bucket header
+            b2_kernel.setArg(0, bucket_ids_buf);
+            b2_kernel.setArg(1, bucket_totalNum_buf);
+            b2_kernel.setArg(2, (uint32_t)R_LENGTH);
             
-            try {
-                // b4: insert record ids
-                b4_kernel.setArg(0, bucket_ids_buf);
-                b4_kernel.setArg(1, key_indices_buf);
-                b4_kernel.setArg(2, bucket_key_rids_buf);
-                b4_kernel.setArg(3, bucket_key_rid_counts_buf);
-                b4_kernel.setArg(4, (uint32_t)R_LENGTH);
-                
-                queue.enqueueNDRangeKernel(b4_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 10 == 0) std::cout << "b4 completed for R[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in b4 kernel at R[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            queue.enqueueNDRangeKernel(b2_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
+            
+            // b3: manage key lists
+            b3_kernel.setArg(0, R_keys_buf);
+            b3_kernel.setArg(1, bucket_ids_buf);
+            b3_kernel.setArg(2, bucket_keys_buf);
+            b3_kernel.setArg(3, bucket_key_counts_buf);
+            b3_kernel.setArg(4, key_indices_buf);
+            b3_kernel.setArg(5, (uint32_t)R_LENGTH);
+            
+            queue.enqueueNDRangeKernel(b3_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
+            
+            // b4: insert record ids
+            b4_kernel.setArg(0, bucket_ids_buf);
+            b4_kernel.setArg(1, key_indices_buf);
+            b4_kernel.setArg(2, bucket_key_rids_buf);
+            b4_kernel.setArg(3, bucket_key_rid_counts_buf);
+            b4_kernel.setArg(4, (uint32_t)R_LENGTH);
+            
+            queue.enqueueNDRangeKernel(b4_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
         }
 
         double buildTime = timer.getTimeMilliseconds();
@@ -313,82 +281,50 @@ int main(int argc, char *argv[]) {
         
         for(int i = 0; i < S_LENGTH; i++) {
             
-            try {
-                // p1: compute hash bucket number
-                p1_kernel.setArg(0, S_keys_buf);
-                p1_kernel.setArg(1, S_hash_values_buf);
-                p1_kernel.setArg(2, S_bucket_ids_buf);
-                p1_kernel.setArg(3, (uint32_t)S_LENGTH);
-                
-                queue.enqueueNDRangeKernel(p1_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 50 == 0) std::cout << "p1 completed for S[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in p1 kernel at S[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            // p1: compute hash bucket number
+            p1_kernel.setArg(0, S_keys_buf);
+            p1_kernel.setArg(1, S_hash_values_buf);
+            p1_kernel.setArg(2, S_bucket_ids_buf);
+            p1_kernel.setArg(3, (uint32_t)S_LENGTH);
             
-            try {
-                // p2: update bucket header (optional)
-                p2_kernel.setArg(0, S_bucket_ids_buf);
-                p2_kernel.setArg(1, bucket_totalNum_buf);
-                p2_kernel.setArg(2, (uint32_t)S_LENGTH);
-                
-                queue.enqueueNDRangeKernel(p2_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 50 == 0) std::cout << "p2 completed for S[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in p2 kernel at S[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            queue.enqueueNDRangeKernel(p1_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
             
-            try {
-                // p3: search key lists
-                p3_kernel.setArg(0, S_keys_buf);
-                p3_kernel.setArg(1, S_bucket_ids_buf);
-                p3_kernel.setArg(2, bucket_keys_buf);
-                p3_kernel.setArg(3, bucket_key_counts_buf);
-                p3_kernel.setArg(4, S_key_indices_buf);
-                p3_kernel.setArg(5, match_found_buf);
-                p3_kernel.setArg(6, (uint32_t)S_LENGTH);
-                
-                queue.enqueueNDRangeKernel(p3_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 50 == 0) std::cout << "p3 completed for S[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in p3 kernel at S[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            // p2: update bucket header (optional)
+            p2_kernel.setArg(0, S_bucket_ids_buf);
+            p2_kernel.setArg(1, bucket_totalNum_buf);
+            p2_kernel.setArg(2, (uint32_t)S_LENGTH);
             
-            try {
-                // p4: join matching records
-                p4_kernel.setArg(0, S_values_buf);
-                p4_kernel.setArg(1, S_bucket_ids_buf);
-                p4_kernel.setArg(2, S_key_indices_buf);
-                p4_kernel.setArg(3, match_found_buf);
-                p4_kernel.setArg(4, bucket_key_rids_buf);
-                p4_kernel.setArg(5, bucket_key_rid_counts_buf);
-                p4_kernel.setArg(6, R_values_buf);
-                p4_kernel.setArg(7, R_value_counts_buf);
-                p4_kernel.setArg(8, join_results_buf);
-                p4_kernel.setArg(9, join_count_buf);
-                p4_kernel.setArg(10, (uint32_t)S_LENGTH);
-                
-                queue.enqueueNDRangeKernel(p4_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-                queue.finish();
-                
-                if(i % 50 == 0) std::cout << "p4 completed for S[" << i << "]" << std::endl;
-                
-            } catch (cl::Error err) {
-                std::cout << "ERROR in p4 kernel at S[" << i << "]: " << err.what() << " (" << err_code(err.err()) << ")" << std::endl;
-                throw;
-            }
+            queue.enqueueNDRangeKernel(p2_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
+            
+            // p3: search key lists
+            p3_kernel.setArg(0, S_keys_buf);
+            p3_kernel.setArg(1, S_bucket_ids_buf);
+            p3_kernel.setArg(2, bucket_keys_buf);
+            p3_kernel.setArg(3, bucket_key_counts_buf);
+            p3_kernel.setArg(4, S_key_indices_buf);
+            p3_kernel.setArg(5, match_found_buf);
+            p3_kernel.setArg(6, (uint32_t)S_LENGTH);
+            
+            queue.enqueueNDRangeKernel(p3_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
+            
+            // p4: join matching records
+            p4_kernel.setArg(0, S_values_buf);
+            p4_kernel.setArg(1, S_bucket_ids_buf);
+            p4_kernel.setArg(2, S_key_indices_buf);
+            p4_kernel.setArg(3, match_found_buf);
+            p4_kernel.setArg(4, bucket_key_rids_buf);
+            p4_kernel.setArg(5, bucket_key_rid_counts_buf);
+            p4_kernel.setArg(6, R_values_buf);
+            p4_kernel.setArg(7, R_value_counts_buf);
+            p4_kernel.setArg(8, join_results_buf);
+            p4_kernel.setArg(9, join_count_buf);
+            p4_kernel.setArg(10, (uint32_t)S_LENGTH);
+            
+            queue.enqueueNDRangeKernel(p4_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
+            queue.finish();
         }
 
         double probeTime = timer.getTimeMilliseconds();
