@@ -1,9 +1,9 @@
 // b4.cl - Build Phase Step 4: Insert the record id into the rid list
 // Each work-item adds its record ID to the appropriate key's rid list
 
-#define BUCKET_HEADER_NUMBER 16
-#define MAX_KEYS_PER_BUCKET 64
-#define MAX_RIDS_PER_KEY 256    // Maximum number of record IDs per key
+#define BUCKET_HEADER_NUMBER 64
+#define MAX_KEYS_PER_BUCKET 1024
+#define MAX_RIDS_PER_KEY 2048    // Maximum number of record IDs per key
 
 __kernel void b4_insert_record_ids(
     __global const uint* bucket_ids,      // Input: bucket IDs from b1

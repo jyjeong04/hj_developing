@@ -1,8 +1,8 @@
 // p3.cl - Probe Phase Step 3: Visit the hash key lists and search for matching keys
 // Each work-item searches for its key in the corresponding bucket
 
-#define BUCKET_HEADER_NUMBER 16
-#define MAX_KEYS_PER_BUCKET 64
+#define BUCKET_HEADER_NUMBER 64
+#define MAX_KEYS_PER_BUCKET 1024
 
 __kernel void p3_search_key_lists(
     __global const uint* S_keys,         // Input: S table keys
@@ -29,10 +29,15 @@ __kernel void p3_search_key_lists(
     
     // Search for matching key in this bucket
     uint bucket_offset = bucket_id * MAX_KEYS_PER_BUCKET;
-    uint current_key_count = bucket_key_counts[bucket_id];
     
-    for (int i = 0; i < current_key_count; i++) {
-        if (bucket_keys[bucket_offset + i] == key) {
+    // Search entire bucket range until we find the key or hit an empty slot
+    for (int i = 0; i < MAX_KEYS_PER_BUCKET; i++) {
+        uint bucket_key = bucket_keys[bucket_offset + i];
+        
+        if (bucket_key == 0xFFFFFFFFU) {
+            // Empty slot - no more keys to search
+            break;
+        } else if (bucket_key == key) {
             found = true;
             key_idx = i;
             break;

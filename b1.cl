@@ -3,7 +3,8 @@
 
 #define RANGE 1024
 #define GOLDEN_RATIO_32 2654435769U
-#define BUCKET_HEADER_NUMBER 16
+#define BUCKET_HEADER_NUMBER 64
+#define MAX_KEYS_PER_BUCKET 1024
 
 // Hash function
 uint hash_function(uint key) {
@@ -12,7 +13,7 @@ uint hash_function(uint key) {
 
 __kernel void b1_compute_hash(
     __global const uint* R_keys,      // Input: R table keys
-    __global uint* hash_values,       // Output: computed hash values  
+    __global uint* hash_values,       // Output: computed hash values
     __global uint* bucket_ids,        // Output: bucket IDs
     const uint length                  // Number of tuples to process
 ) {

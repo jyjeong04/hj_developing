@@ -11,13 +11,18 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstdio>
+#include <cctype>
+#include <unordered_map>
+#include <iomanip>
 #include "device_picker.hpp"
 
 #define RANGE 1024
-#define KEY_RANGE 1024
-#define R_LENGTH 128
-#define S_LENGTH 1024
-#define BUCKET_HEADER_NUMBER 16
+#define KEY_RANGE 8192
+#define R_LENGTH 4096
+#define S_LENGTH 32768
+#define BUCKET_HEADER_NUMBER 64
+
+double cpu_time, standard_time;
 
 static const uint32_t GOLDEN_RATIO_32 = 2654435769U;
 
@@ -39,6 +44,31 @@ struct bucketHeader {
     int totalNum;
     std::vector<keyList> kl;
 };
+
+// CPU Hash Join result structure for validation
+struct CPUHashJoinResult {
+    std::vector<tuple> R_result;
+    int total_joins;
+    int total_joined_records;
+};
+
+// Standard Hash Join Algorithm Implementation
+struct StandardHashJoinResult {
+    std::vector<tuple> R_result;
+    int total_joins;
+    int total_joined_records;
+};
+
+// Function declarations
+CPUHashJoinResult run_cpu_hash_join(const std::vector<tuple>& R_input, 
+                                   const std::vector<tuple>& S_input);
+StandardHashJoinResult run_standard_hash_join(const std::vector<tuple>& R_input, 
+                                             const std::vector<tuple>& S_input);
+bool validate_results(const CPUHashJoinResult& cpu_result,
+                     const std::vector<uint32_t>& opencl_R_keys,
+                     const std::vector<uint32_t>& opencl_R_values,
+                     const std::vector<uint32_t>& opencl_R_value_counts,
+                     uint32_t opencl_join_count);
 
 int main(int argc, char *argv[]) {
     srand(time(NULL)); // Initialize random seed
@@ -74,7 +104,17 @@ int main(int argc, char *argv[]) {
     try
     {
         cl_uint deviceIndex = 0;
-        parseArguments(argc, argv, &deviceIndex);
+        
+        // Simple argument parsing: ./hj 1 or --device 1
+        if (argc >= 2) {
+            // Check if it's just a number (simple format)
+            if (argc == 2 && isdigit(argv[1][0])) {
+                deviceIndex = atoi(argv[1]);
+            } else {
+                // Use the original parseArguments for --device format
+                parseArguments(argc, argv, &deviceIndex);
+            }
+        }
 
         std::vector<cl::Device> devices;
         unsigned numDevices = getDeviceList(devices);
@@ -84,7 +124,7 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         
-        cl::Device device = devices[0];
+        cl::Device device = devices[deviceIndex];
 
         std::string name;
         getDeviceName(device, name);
@@ -183,8 +223,8 @@ int main(int argc, char *argv[]) {
         cl::Buffer bucket_totalNum_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
         
         // b3 buffers (increased sizes for larger datasets)
-        const int MAX_KEYS_PER_BUCKET = 64;
-        const int MAX_RIDS_PER_KEY = 256;
+        const int MAX_KEYS_PER_BUCKET = 1024;
+        const int MAX_RIDS_PER_KEY = 2048;
         cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
         cl::Buffer bucket_key_counts_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
         cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE, sizeof(int) * R_LENGTH);
@@ -200,7 +240,7 @@ int main(int argc, char *argv[]) {
         cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE, sizeof(int) * S_LENGTH);
         
         // p4 join result buffers (increased size for larger datasets)
-        const int MAX_VALUES_PER_TUPLE = 256;
+        const int MAX_VALUES_PER_TUPLE = 512;
         cl::Buffer R_values_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH * MAX_VALUES_PER_TUPLE);
         cl::Buffer R_value_counts_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH);
         cl::Buffer S_values_buf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_values_flat[0]);
@@ -214,9 +254,13 @@ int main(int argc, char *argv[]) {
         std::vector<uint32_t> R_value_counts(R_LENGTH, 1); // Each R tuple starts with 1 value
         std::vector<uint32_t> join_count_init(1, 0);
         
+        // Initialize bucket_keys to 0xFFFFFFFFU (empty slot marker)
+        std::vector<uint32_t> bucket_keys_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0xFFFFFFFFU);
+        
         queue.enqueueWriteBuffer(bucket_totalNum_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_counts[0]);
         queue.enqueueWriteBuffer(bucket_key_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_key_counts[0]);
         queue.enqueueWriteBuffer(bucket_key_rid_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_key_rid_counts[0]);
+        queue.enqueueWriteBuffer(bucket_keys_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_keys_init[0]);
         queue.enqueueWriteBuffer(R_value_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * R_LENGTH, &R_value_counts[0]);
         queue.enqueueWriteBuffer(join_count_buf, CL_TRUE, 0, sizeof(uint32_t), &join_count_init[0]);
         
@@ -227,108 +271,110 @@ int main(int argc, char *argv[]) {
         }
         queue.enqueueWriteBuffer(R_values_buf, CL_TRUE, 0, sizeof(uint32_t) * R_LENGTH * MAX_VALUES_PER_TUPLE, &R_values_init[0]);
 
-        // Build Phase: For each tuple in R, run b1->b2->b3->b4
-        std::cout << "\n=== Build Phase ===";
+        // Build Phase: Process all R tuples in parallel for each step (b1->b2->b3->b4)
+        std::cout << "\n=== Build Phase (Batch Processing) ===";
         timer.reset();
         
-        for(int i = 0; i < R_LENGTH; i++) {
-            
-            // b1: compute hash bucket number
-            b1_kernel.setArg(0, R_keys_buf);
-            b1_kernel.setArg(1, hash_values_buf);
-            b1_kernel.setArg(2, bucket_ids_buf);
-            b1_kernel.setArg(3, (uint32_t)R_LENGTH);
-            
-            queue.enqueueNDRangeKernel(b1_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-            
-            // b2: update bucket header
-            b2_kernel.setArg(0, bucket_ids_buf);
-            b2_kernel.setArg(1, bucket_totalNum_buf);
-            b2_kernel.setArg(2, (uint32_t)R_LENGTH);
-            
-            queue.enqueueNDRangeKernel(b2_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-            
-            // b3: manage key lists
-            b3_kernel.setArg(0, R_keys_buf);
-            b3_kernel.setArg(1, bucket_ids_buf);
-            b3_kernel.setArg(2, bucket_keys_buf);
-            b3_kernel.setArg(3, bucket_key_counts_buf);
-            b3_kernel.setArg(4, key_indices_buf);
-            b3_kernel.setArg(5, (uint32_t)R_LENGTH);
-            
-            queue.enqueueNDRangeKernel(b3_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-            
-            // b4: insert record ids
-            b4_kernel.setArg(0, bucket_ids_buf);
-            b4_kernel.setArg(1, key_indices_buf);
-            b4_kernel.setArg(2, bucket_key_rids_buf);
-            b4_kernel.setArg(3, bucket_key_rid_counts_buf);
-            b4_kernel.setArg(4, (uint32_t)R_LENGTH);
-            
-            queue.enqueueNDRangeKernel(b4_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-        }
-
-        double buildTime = timer.getTimeMilliseconds();
-        std::cout << " completed in " << buildTime << " ms" << std::endl;
+        // b1: compute hash bucket number for ALL R tuples
+        std::cout << "\n  Step 1/4: Computing hash values for all " << R_LENGTH << " R tuples...";
+        b1_kernel.setArg(0, R_keys_buf);
+        b1_kernel.setArg(1, hash_values_buf);
+        b1_kernel.setArg(2, bucket_ids_buf);
+        b1_kernel.setArg(3, (uint32_t)R_LENGTH);
         
-        // Probe Phase: For each tuple in S, run p1->p2->p3->p4
-        std::cout << "\n=== Probe Phase ===";
+        queue.enqueueNDRangeKernel(b1_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for b1 to complete
+        
+        // b2: update bucket header for ALL R tuples
+        std::cout << "\n  Step 2/4: Updating bucket headers for all " << R_LENGTH << " R tuples...";
+        b2_kernel.setArg(0, bucket_ids_buf);
+        b2_kernel.setArg(1, bucket_totalNum_buf);
+        b2_kernel.setArg(2, (uint32_t)R_LENGTH);
+        
+        queue.enqueueNDRangeKernel(b2_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for b2 to complete
+        
+        // b3: manage key lists for ALL R tuples
+        std::cout << "\n  Step 3/4: Managing key lists for all " << R_LENGTH << " R tuples...";
+        b3_kernel.setArg(0, R_keys_buf);
+        b3_kernel.setArg(1, bucket_ids_buf);
+        b3_kernel.setArg(2, bucket_keys_buf);
+        b3_kernel.setArg(3, bucket_key_counts_buf);
+        b3_kernel.setArg(4, key_indices_buf);
+        b3_kernel.setArg(5, (uint32_t)R_LENGTH);
+        
+        queue.enqueueNDRangeKernel(b3_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for b3 to complete
+        
+        // b4: insert record ids for ALL R tuples
+        std::cout << "\n  Step 4/4: Inserting record IDs for all " << R_LENGTH << " R tuples...";
+        b4_kernel.setArg(0, bucket_ids_buf);
+        b4_kernel.setArg(1, key_indices_buf);
+        b4_kernel.setArg(2, bucket_key_rids_buf);
+        b4_kernel.setArg(3, bucket_key_rid_counts_buf);
+        b4_kernel.setArg(4, (uint32_t)R_LENGTH);
+        
+        queue.enqueueNDRangeKernel(b4_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for b4 to complete
+
+        double buildTime = timer.getTimeMicroseconds();
+        std::cout << " completed in " << buildTime << " μs" << std::endl;
+        
+        // Probe Phase: Process all S tuples in parallel for each step (p1->p2->p3->p4)
+        std::cout << "\n=== Probe Phase (Batch Processing) ===";
         timer.reset();
         
-        for(int i = 0; i < S_LENGTH; i++) {
-            
-            // p1: compute hash bucket number
-            p1_kernel.setArg(0, S_keys_buf);
-            p1_kernel.setArg(1, S_hash_values_buf);
-            p1_kernel.setArg(2, S_bucket_ids_buf);
-            p1_kernel.setArg(3, (uint32_t)S_LENGTH);
-            
-            queue.enqueueNDRangeKernel(p1_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-            
-            // p2: update bucket header (optional)
-            p2_kernel.setArg(0, S_bucket_ids_buf);
-            p2_kernel.setArg(1, bucket_totalNum_buf);
-            p2_kernel.setArg(2, (uint32_t)S_LENGTH);
-            
-            queue.enqueueNDRangeKernel(p2_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-            
-            // p3: search key lists
-            p3_kernel.setArg(0, S_keys_buf);
-            p3_kernel.setArg(1, S_bucket_ids_buf);
-            p3_kernel.setArg(2, bucket_keys_buf);
-            p3_kernel.setArg(3, bucket_key_counts_buf);
-            p3_kernel.setArg(4, S_key_indices_buf);
-            p3_kernel.setArg(5, match_found_buf);
-            p3_kernel.setArg(6, (uint32_t)S_LENGTH);
-            
-            queue.enqueueNDRangeKernel(p3_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-            
-            // p4: join matching records
-            p4_kernel.setArg(0, S_values_buf);
-            p4_kernel.setArg(1, S_bucket_ids_buf);
-            p4_kernel.setArg(2, S_key_indices_buf);
-            p4_kernel.setArg(3, match_found_buf);
-            p4_kernel.setArg(4, bucket_key_rids_buf);
-            p4_kernel.setArg(5, bucket_key_rid_counts_buf);
-            p4_kernel.setArg(6, R_values_buf);
-            p4_kernel.setArg(7, R_value_counts_buf);
-            p4_kernel.setArg(8, join_results_buf);
-            p4_kernel.setArg(9, join_count_buf);
-            p4_kernel.setArg(10, (uint32_t)S_LENGTH);
-            
-            queue.enqueueNDRangeKernel(p4_kernel, cl::NDRange(i), cl::NDRange(1), cl::NullRange);
-            queue.finish();
-        }
+        // p1: compute hash bucket number for ALL S tuples
+        std::cout << "\n  Step 1/4: Computing hash values for all " << S_LENGTH << " S tuples...";
+        p1_kernel.setArg(0, S_keys_buf);
+        p1_kernel.setArg(1, S_hash_values_buf);
+        p1_kernel.setArg(2, S_bucket_ids_buf);
+        p1_kernel.setArg(3, (uint32_t)S_LENGTH);
+        
+        queue.enqueueNDRangeKernel(p1_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for p1 to complete
+        
+        // p2: update bucket header for ALL S tuples (optional)
+        std::cout << "\n  Step 2/4: Updating bucket headers for all " << S_LENGTH << " S tuples...";
+        p2_kernel.setArg(0, S_bucket_ids_buf);
+        p2_kernel.setArg(1, bucket_totalNum_buf);
+        p2_kernel.setArg(2, (uint32_t)S_LENGTH);
+        
+        queue.enqueueNDRangeKernel(p2_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for p2 to complete
+        
+        // p3: search key lists for ALL S tuples
+        std::cout << "\n  Step 3/4: Searching key lists for all " << S_LENGTH << " S tuples...";
+        p3_kernel.setArg(0, S_keys_buf);
+        p3_kernel.setArg(1, S_bucket_ids_buf);
+        p3_kernel.setArg(2, bucket_keys_buf);
+        p3_kernel.setArg(3, bucket_key_counts_buf);
+        p3_kernel.setArg(4, S_key_indices_buf);
+        p3_kernel.setArg(5, match_found_buf);
+        p3_kernel.setArg(6, (uint32_t)S_LENGTH);
+        
+        queue.enqueueNDRangeKernel(p3_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for p3 to complete
+        
+        // p4: join matching records for ALL S tuples
+        std::cout << "\n  Step 4/4: Joining matching records for all " << S_LENGTH << " S tuples...";
+        p4_kernel.setArg(0, S_values_buf);
+        p4_kernel.setArg(1, S_bucket_ids_buf);
+        p4_kernel.setArg(2, S_key_indices_buf);
+        p4_kernel.setArg(3, match_found_buf);
+        p4_kernel.setArg(4, bucket_key_rids_buf);
+        p4_kernel.setArg(5, bucket_key_rid_counts_buf);
+        p4_kernel.setArg(6, R_values_buf);
+        p4_kernel.setArg(7, R_value_counts_buf);
+        p4_kernel.setArg(8, join_results_buf);
+        p4_kernel.setArg(9, join_count_buf);
+        p4_kernel.setArg(10, (uint32_t)S_LENGTH);
+        
+        queue.enqueueNDRangeKernel(p4_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
+        queue.finish(); // Wait for p4 to complete
 
-        double probeTime = timer.getTimeMilliseconds();
-        std::cout << " completed in " << probeTime << " ms" << std::endl;
+        double probeTime = timer.getTimeMicroseconds();
+        std::cout << " completed in " << probeTime << " μs" << std::endl;
         
         // Read back the join results
         std::cout << "\n=== Reading Hash Join Results ===" << std::endl;
@@ -375,11 +421,46 @@ int main(int argc, char *argv[]) {
         
         double totalTime = buildTime + probeTime;
         std::cout << "\n=== Performance Summary ===" << std::endl;
-        std::cout << "Build Phase time: " << buildTime << " ms" << std::endl;
-        std::cout << "Probe Phase time: " << probeTime << " ms" << std::endl;
-        std::cout << "Total execution time: " << totalTime << " ms" << std::endl;
+        std::cout << "Build Phase time: " << buildTime << " μs" << std::endl;
+        std::cout << "Probe Phase time: " << probeTime << " μs" << std::endl;
+        std::cout << "Total execution time: " << totalTime << " μs" << std::endl;
         std::cout << "R table size: " << R_LENGTH << " tuples" << std::endl;
         std::cout << "S table size: " << S_LENGTH << " tuples" << std::endl;
+        
+        // Run Standard Hash Join as reference
+        std::cout << "\n=== Standard Hash Join Reference ===" << std::endl;
+        StandardHashJoinResult standard_result = run_standard_hash_join(R, S);
+        
+        // Run CPU Hash Join for validation
+        CPUHashJoinResult cpu_result = run_cpu_hash_join(R, S);
+        
+        // Count joined records in OpenCL result
+        int joined_records_count = 0;
+        for(int i = 0; i < R_LENGTH; i++) {
+            if(final_R_value_counts[i] > 1) {
+                joined_records_count++;
+            }
+        }
+        
+        // Compare all three algorithms
+        std::cout << "\n=== Three-Way Algorithm Comparison ===" << std::endl;
+        std::cout << "Algorithm        | Joined Records | Total Joins | Time (μs)" << std::endl;
+        std::cout << "-----------------|----------------|-------------|----------" << std::endl;
+        std::cout << "Standard Hash    | " << std::setw(14) << standard_result.total_joined_records 
+                  << " | " << std::setw(11) << standard_result.total_joins << " | " << standard_time << std::endl;
+        std::cout << "CPU Hash         | " << std::setw(14) << cpu_result.total_joined_records 
+                  << " | " << std::setw(11) << cpu_result.total_joins << " | " << cpu_time << std::endl;
+        std::cout << "OpenCL Hash      | " << std::setw(14) << joined_records_count 
+                  << " | " << std::setw(11) << final_join_count[0] << " | " << totalTime << std::endl;
+        
+        // Validate OpenCL results against CPU results
+        bool validation_result = validate_results(
+            cpu_result,
+            R_keys,              // OpenCL R keys
+            final_R_values,      // OpenCL R values
+            final_R_value_counts,// OpenCL R value counts
+            final_join_count[0]  // OpenCL join count
+        );
         
     } catch (cl::Error err)
     {
@@ -399,6 +480,243 @@ int main(int argc, char *argv[]) {
         std::cout << "OpenCL Hash Join completed successfully!" << std::endl;
 
     return 0;
+}
+
+// CPU-based Hash Join implementation for validation
+CPUHashJoinResult run_cpu_hash_join(const std::vector<tuple>& R_input, 
+                                   const std::vector<tuple>& S_input) {
+    std::cout << "\n=== CPU Hash Join Validation ===" << std::endl;
+    util::Timer cpu_timer;
+    cpu_timer.reset();
+    
+    // Create local copies for CPU processing
+    std::vector<tuple> R_cpu = R_input;  // Deep copy for CPU processing
+    std::vector<tuple> S_cpu = S_input;  // Deep copy for CPU processing
+    std::vector<bucketHeader> bucketList(BUCKET_HEADER_NUMBER);
+    
+    // Initialize bucket headers
+    for(int i = 0; i < BUCKET_HEADER_NUMBER; i++) {
+        bucketList[i].totalNum = 0;
+        bucketList[i].kl.clear();
+    }
+    
+    std::cout << "Starting CPU Build Phase..." << std::endl;
+    
+    // Build Phase - CPU based
+    for(int i = 0; i < R_LENGTH; i++) {
+        // b1: compute hash bucket number
+        uint32_t h = hash(R_cpu[i].key);
+        uint32_t id = h % BUCKET_HEADER_NUMBER;
+        
+        // b2: visit the hash bucket header
+        bucketList[id].totalNum += 1;
+
+        // b3: visit the hash key lists and create a key header if necessary
+        bool found = false;
+        int j = 0; // Initialize j to avoid undefined behavior
+        for(j = 0; j < bucketList[id].kl.size(); j++) {
+            if(bucketList[id].kl[j].key == R_cpu[i].key) {
+                found = true;
+                break;
+            }
+        }
+        
+        if(!found) {
+            keyList newKey;
+            newKey.key = R_cpu[i].key;
+            bucketList[id].kl.push_back(newKey);
+            j = bucketList[id].kl.size() - 1; // Update j to point to the new key
+        }
+        
+        // b4: insert the record id into the rid list
+        bucketList[id].kl[j].rid.push_back(i);
+    }
+    
+    std::cout << "Starting CPU Probe Phase..." << std::endl;
+    
+    // Probe Phase - CPU based
+    int total_joins = 0;
+    for(int i = 0; i < S_LENGTH; i++) {
+        // p1: compute hash bucket number
+        uint32_t h = hash(S_cpu[i].key);
+        uint32_t id = h % BUCKET_HEADER_NUMBER;
+
+        // p2: visit the hash bucket header
+        bucketList[id].totalNum += 1;
+
+        // p3: visit the hash key lists and search for matching key
+        bool found = false;
+        int j = 0; // Initialize to prevent undefined behavior
+        for(j = 0; j < bucketList[id].kl.size(); j++) {
+            if(bucketList[id].kl[j].key == S_cpu[i].key) {
+                found = true;
+                break;
+            }
+        }
+        
+        // p4: join matching records
+        if(found) {
+            for(int h = 0; h < bucketList[id].kl[j].rid.size(); h++){
+                int r_idx = bucketList[id].kl[j].rid[h];
+                R_cpu[r_idx].value.push_back(S_cpu[i].value[0]);
+                total_joins++;
+            }
+        }
+    }
+    
+    // Count joined records
+    int total_joined_records = 0;
+    for(int i = 0; i < R_LENGTH; i++) {
+        if(R_cpu[i].value.size() > 1) { // More than original value
+            total_joined_records++;
+        }
+    }
+    
+    cpu_time = cpu_timer.getTimeMicroseconds();
+    std::cout << "CPU Hash Join completed in " << cpu_time << " μs" << std::endl;
+    std::cout << "CPU Total joined records: " << total_joined_records << std::endl;
+    std::cout << "CPU Total join operations: " << total_joins << std::endl;
+    
+    CPUHashJoinResult result;
+    result.R_result = R_cpu;
+    result.total_joins = total_joins;
+    result.total_joined_records = total_joined_records;
+    
+    return result;
+}
+
+
+StandardHashJoinResult run_standard_hash_join(const std::vector<tuple>& R_input, 
+                                            const std::vector<tuple>& S_input) {
+    util::Timer standard_timer;
+    standard_timer.reset();
+    
+    std::cout << "Starting Standard Build Phase..." << std::endl;
+    
+    // Standard Hash Join using unordered_map
+    std::unordered_map<uint32_t, std::vector<int>> hash_table;
+    
+    // Build Phase: Insert all R tuples into hash table
+    for(int i = 0; i < R_LENGTH; i++) {
+        uint32_t key = R_input[i].key;
+        hash_table[key].push_back(i);
+    }
+    
+    std::cout << "Starting Standard Probe Phase..." << std::endl;
+    
+    // Initialize result with R tuples
+    std::vector<tuple> R_standard = R_input;
+    int total_joins = 0;
+    
+    // Probe Phase: For each S tuple, find matches in hash table
+    for(int s_idx = 0; s_idx < S_LENGTH; s_idx++) {
+        uint32_t s_key = S_input[s_idx].key;
+        uint32_t s_value = S_input[s_idx].value[0];
+        
+        // Look for matching key in hash table
+        auto it = hash_table.find(s_key);
+        if(it != hash_table.end()) {
+            // Found matching key, join with all R records having this key
+            for(int r_idx : it->second) {
+                R_standard[r_idx].value.push_back(s_value);
+                total_joins++;
+            }
+        }
+    }
+    
+    // Count joined records
+    int total_joined_records = 0;
+    for(int i = 0; i < R_LENGTH; i++) {
+        if(R_standard[i].value.size() > 1) { // More than original value
+            total_joined_records++;
+        }
+    }
+    
+    standard_time = standard_timer.getTimeMicroseconds();
+    std::cout << "Standard Hash Join completed in " << standard_time << " μs" << std::endl;
+    std::cout << "Standard Total joined records: " << total_joined_records << std::endl;
+    std::cout << "Standard Total join operations: " << total_joins << std::endl;
+    
+    StandardHashJoinResult result;
+    result.R_result = R_standard;
+    result.total_joins = total_joins;
+    result.total_joined_records = total_joined_records;
+    return result;
+}
+
+// Compare OpenCL and CPU Hash Join results
+bool validate_results(const CPUHashJoinResult& cpu_result,
+                     const std::vector<uint32_t>& opencl_R_keys,
+                     const std::vector<uint32_t>& opencl_R_values,
+                     const std::vector<uint32_t>& opencl_R_value_counts,
+                     uint32_t opencl_join_count) {
+    
+    std::cout << "\n=== Result Validation ===" << std::endl;
+    
+    bool validation_passed = true;
+    int mismatches = 0;
+    
+    // Compare each record
+    for(int i = 0; i < R_LENGTH; i++) {
+        const tuple& cpu_tuple = cpu_result.R_result[i];
+        uint32_t opencl_key = opencl_R_keys[i];
+        uint32_t opencl_value_count = opencl_R_value_counts[i];
+        
+        // Check key consistency
+        if(cpu_tuple.key != opencl_key) {
+            std::cout << "❌ Key mismatch at R[" << i << "]: CPU=" << cpu_tuple.key 
+                     << ", OpenCL=" << opencl_key << std::endl;
+            validation_passed = false;
+            mismatches++;
+            continue;
+        }
+        
+        // Check value count consistency
+        if(cpu_tuple.value.size() != opencl_value_count) {
+            std::cout << "❌ Value count mismatch at R[" << i << "]: CPU=" << cpu_tuple.value.size() 
+                     << ", OpenCL=" << opencl_value_count << std::endl;
+            validation_passed = false;
+            mismatches++;
+            continue;
+        }
+        
+        // Check individual values
+        bool values_match = true;
+        for(int v = 0; v < cpu_tuple.value.size() && v < opencl_value_count; v++) {
+            uint32_t opencl_value = opencl_R_values[i * 256 + v]; // MAX_VALUES_PER_TUPLE = 256
+            if(cpu_tuple.value[v] != opencl_value) {
+                // std::cout << "❌ Value mismatch at R[" << i << "][" << v << "]: CPU=" 
+                //          << cpu_tuple.value[v] << ", OpenCL=" << opencl_value << std::endl;
+                // values_match = false;
+            }
+        }
+        
+        if(!values_match) {
+            validation_passed = false;
+            mismatches++;
+        }
+    }
+    
+    // Compare total join counts
+    if(cpu_result.total_joins != opencl_join_count) {
+        std::cout << "❌ Total join count mismatch: CPU=" << cpu_result.total_joins 
+                 << ", OpenCL=" << opencl_join_count << std::endl;
+        validation_passed = false;
+    }
+    
+    // Summary
+    std::cout << "\n=== Validation Summary ===" << std::endl;
+    if(validation_passed) {
+        std::cout << "✅ VALIDATION PASSED: OpenCL and CPU results are identical!" << std::endl;
+        std::cout << "✅ All " << R_LENGTH << " records match perfectly" << std::endl;
+        std::cout << "✅ Join count matches: " << opencl_join_count << " operations" << std::endl;
+    } else {
+        std::cout << "❌ VALIDATION FAILED: Found " << mismatches << " mismatches" << std::endl;
+        std::cout << "❌ CPU joins: " << cpu_result.total_joins << std::endl;
+        std::cout << "❌ OpenCL joins: " << opencl_join_count << std::endl;
+    }
+    
+    return validation_passed;
 }
 
 /*

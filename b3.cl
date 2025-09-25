@@ -1,8 +1,8 @@
 // b3.cl - Build Phase Step 3: Visit the hash key lists and create a key header if necessary
 // Each work-item finds or creates a key entry in its bucket
 
-#define BUCKET_HEADER_NUMBER 16
-#define MAX_KEYS_PER_BUCKET 64  // Maximum number of unique keys per bucket
+#define BUCKET_HEADER_NUMBER 64
+#define MAX_KEYS_PER_BUCKET 1024  // Maximum number of unique keys per bucket
 
 __kernel void b3_manage_key_lists(
     __global const uint* R_keys,         // Input: R table keys
@@ -26,31 +26,37 @@ __kernel void b3_manage_key_lists(
     bool found = false;
     int key_idx = -1;
     
-    // Search for existing key in this bucket
     uint bucket_offset = bucket_id * MAX_KEYS_PER_BUCKET;
-    uint current_key_count = bucket_key_counts[bucket_id]; // Simple read (OpenCL 3.0 compatible)
     
-    for (int i = 0; i < current_key_count; i++) {
-        if (bucket_keys[bucket_offset + i] == key) {
+    // Search entire bucket range to prevent race conditions
+    // Use 0xFFFFFFFFU as empty slot marker (keys are 0~1023)
+    for (int i = 0; i < MAX_KEYS_PER_BUCKET; i++) {
+        uint current_key = bucket_keys[bucket_offset + i];
+        
+        if (current_key == key) {
+            // Found existing key
             found = true;
             key_idx = i;
             break;
+        } else if (current_key == 0xFFFFFFFFU) {
+            // Found empty slot, try to claim it atomically
+            if (atomic_cmpxchg(&bucket_keys[bucket_offset + i], 0xFFFFFFFFU, key) == 0xFFFFFFFFU) {
+                // Successfully claimed this slot
+                found = true;
+                key_idx = i;
+                // Update key count
+                atomic_inc(&bucket_key_counts[bucket_id]);
+                break;
+            }
+            // If atomic_cmpxchg failed, another work-item claimed this slot
+            // Continue searching (that work-item might have inserted our key)
+            i--; // Recheck this slot
         }
     }
     
-    // If key not found, try to add it
-    if (!found) {
-        // Atomically get the next available slot
-        uint old_count = atomic_inc(&bucket_key_counts[bucket_id]);
-        
-        if (old_count < MAX_KEYS_PER_BUCKET) {
-            // We got a valid slot
-            bucket_keys[bucket_offset + old_count] = key;
-            key_idx = old_count;
-        }
-        // If bucket is full, key_idx remains -1 (error condition)
-    }
+    // If no slot was found (bucket full), key_idx remains -1
     
     // Store the key index for this tuple
     key_indices[gid] = key_idx;
 }
+

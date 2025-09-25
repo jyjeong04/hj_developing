@@ -1,9 +1,10 @@
 // p1.cl - Probe Phase Step 1: Compute hash bucket number
 // Each work-item processes one tuple from S table
 
-#define RANGE 4
+#define RANGE 1024
 #define GOLDEN_RATIO_32 2654435769U
-#define BUCKET_HEADER_NUMBER 16
+#define BUCKET_HEADER_NUMBER 64
+#define MAX_KEYS_PER_BUCKET 1024
 
 // Hash function
 uint hash_function(uint key) {
