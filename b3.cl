@@ -1,7 +1,7 @@
 // b3.cl - Build Phase Step 3: Visit the hash key lists and create a key header if necessary
 // Each work-item finds or creates a key entry in its bucket
 
-#define BUCKET_HEADER_NUMBER 64
+#define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024  // Maximum number of unique keys per bucket
 
 __kernel void b3_manage_key_lists(

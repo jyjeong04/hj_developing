@@ -1,10 +1,10 @@
 // p4.cl - Probe Phase Step 4: Join matching records
 // Each work-item joins its S tuple with all matching R tuples
 
-#define BUCKET_HEADER_NUMBER 64
+#define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024
-#define MAX_RIDS_PER_KEY 2048
-#define MAX_VALUES_PER_TUPLE 512    // Maximum values that can be stored in one tuple
+#define MAX_RIDS_PER_KEY 16
+#define MAX_VALUES_PER_TUPLE 2048    // Maximum values that can be stored in one tuple
 
 __kernel void p4_join_records(
     __global const uint* S_values,       // Input: S table values

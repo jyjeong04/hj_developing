@@ -1,7 +1,7 @@
 // p3.cl - Probe Phase Step 3: Visit the hash key lists and search for matching keys
 // Each work-item searches for its key in the corresponding bucket
 
-#define BUCKET_HEADER_NUMBER 64
+#define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024
 
 __kernel void p3_search_key_lists(

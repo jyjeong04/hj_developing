@@ -17,10 +17,10 @@
 #include "device_picker.hpp"
 
 #define RANGE 1024
-#define KEY_RANGE 8192
-#define R_LENGTH 4096
-#define S_LENGTH 32768
-#define BUCKET_HEADER_NUMBER 64
+#define KEY_RANGE 65536
+#define R_LENGTH 65536
+#define S_LENGTH 16777216
+#define BUCKET_HEADER_NUMBER 512
 
 double cpu_time, standard_time;
 
@@ -217,34 +217,83 @@ int main(int argc, char *argv[]) {
         cl::Buffer R_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_keys[0]);
         cl::Buffer S_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_keys[0]);
         
-        // Build phase buffers
-        cl::Buffer hash_values_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH);
-        cl::Buffer bucket_ids_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH);
-        cl::Buffer bucket_totalNum_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
+        // Build phase buffers with debug output
+        std::cout << "\n=== Buffer Creation Debug ===" << std::endl;
         
-        // b3 buffers (increased sizes for larger datasets)
+        size_t hash_values_size = sizeof(uint32_t) * R_LENGTH;
+        std::cout << "Creating hash_values_buf: " << hash_values_size << " bytes (" << hash_values_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer hash_values_buf(context, CL_MEM_READ_WRITE, hash_values_size);
+        
+        size_t bucket_ids_size = sizeof(uint32_t) * R_LENGTH;
+        std::cout << "Creating bucket_ids_buf: " << bucket_ids_size << " bytes (" << bucket_ids_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer bucket_ids_buf(context, CL_MEM_READ_WRITE, bucket_ids_size);
+        
+        size_t bucket_totalNum_size = sizeof(uint32_t) * BUCKET_HEADER_NUMBER;
+        std::cout << "Creating bucket_totalNum_buf: " << bucket_totalNum_size << " bytes" << std::endl;
+        cl::Buffer bucket_totalNum_buf(context, CL_MEM_READ_WRITE, bucket_totalNum_size);
+        
+        // b3 buffers (memory-optimized for 16M scale)
         const int MAX_KEYS_PER_BUCKET = 1024;
-        const int MAX_RIDS_PER_KEY = 2048;
-        cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
-        cl::Buffer bucket_key_counts_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
-        cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE, sizeof(int) * R_LENGTH);
+        const int MAX_RIDS_PER_KEY = 16;
+        
+        size_t bucket_keys_size = sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET;
+        std::cout << "Creating bucket_keys_buf: " << bucket_keys_size << " bytes (" << bucket_keys_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE, bucket_keys_size);
+        
+        size_t bucket_key_counts_size = sizeof(uint32_t) * BUCKET_HEADER_NUMBER;
+        std::cout << "Creating bucket_key_counts_buf: " << bucket_key_counts_size << " bytes" << std::endl;
+        cl::Buffer bucket_key_counts_buf(context, CL_MEM_READ_WRITE, bucket_key_counts_size);
+        
+        size_t key_indices_size = sizeof(int) * R_LENGTH;
+        std::cout << "Creating key_indices_buf: " << key_indices_size << " bytes (" << key_indices_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE, key_indices_size);
         
         // b4 buffers
-        cl::Buffer bucket_key_rids_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY);
-        cl::Buffer bucket_key_rid_counts_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
+        size_t bucket_key_rids_size = sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY;
+        std::cout << "Creating bucket_key_rids_buf: " << bucket_key_rids_size << " bytes (" << bucket_key_rids_size/(1024*1024*1024) << " GB)" << std::endl;
+        cl::Buffer bucket_key_rids_buf(context, CL_MEM_READ_WRITE, bucket_key_rids_size);
+        
+        size_t bucket_key_rid_counts_size = sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET;
+        std::cout << "Creating bucket_key_rid_counts_buf: " << bucket_key_rid_counts_size << " bytes (" << bucket_key_rid_counts_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer bucket_key_rid_counts_buf(context, CL_MEM_READ_WRITE, bucket_key_rid_counts_size);
         
         // Probe phase buffers
-        cl::Buffer S_hash_values_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * S_LENGTH);
-        cl::Buffer S_bucket_ids_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * S_LENGTH);
-        cl::Buffer match_found_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * S_LENGTH);
-        cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE, sizeof(int) * S_LENGTH);
+        size_t s_hash_values_size = sizeof(uint32_t) * S_LENGTH;
+        std::cout << "Creating S_hash_values_buf: " << s_hash_values_size << " bytes (" << s_hash_values_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer S_hash_values_buf(context, CL_MEM_READ_WRITE, s_hash_values_size);
         
-        // p4 join result buffers (increased size for larger datasets)
-        const int MAX_VALUES_PER_TUPLE = 512;
-        cl::Buffer R_values_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH * MAX_VALUES_PER_TUPLE);
-        cl::Buffer R_value_counts_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH);
-        cl::Buffer S_values_buf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_values_flat[0]);
-        cl::Buffer join_results_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * S_LENGTH * MAX_RIDS_PER_KEY * 2);
+        size_t s_bucket_ids_size = sizeof(uint32_t) * S_LENGTH;
+        std::cout << "Creating S_bucket_ids_buf: " << s_bucket_ids_size << " bytes (" << s_bucket_ids_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer S_bucket_ids_buf(context, CL_MEM_READ_WRITE, s_bucket_ids_size);
+        
+        size_t match_found_size = sizeof(uint32_t) * S_LENGTH;
+        std::cout << "Creating match_found_buf: " << match_found_size << " bytes (" << match_found_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer match_found_buf(context, CL_MEM_READ_WRITE, match_found_size);
+        
+        size_t s_key_indices_size = sizeof(int) * S_LENGTH;
+        std::cout << "Creating S_key_indices_buf: " << s_key_indices_size << " bytes (" << s_key_indices_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE, s_key_indices_size);
+        
+        // p4 join result buffers (increased size for massive datasets - 4x expansion)
+        const int MAX_VALUES_PER_TUPLE = 2048;
+        
+        size_t r_values_size = sizeof(uint32_t) * R_LENGTH * MAX_VALUES_PER_TUPLE;
+        std::cout << "Creating R_values_buf: " << r_values_size << " bytes (" << r_values_size/(1024*1024*1024) << " GB)" << std::endl;
+        cl::Buffer R_values_buf(context, CL_MEM_READ_WRITE, r_values_size);
+        
+        size_t r_value_counts_size = sizeof(uint32_t) * R_LENGTH;
+        std::cout << "Creating R_value_counts_buf: " << r_value_counts_size << " bytes (" << r_value_counts_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer R_value_counts_buf(context, CL_MEM_READ_WRITE, r_value_counts_size);
+        
+        size_t s_values_size = sizeof(uint32_t) * S_LENGTH;
+        std::cout << "Creating S_values_buf: " << s_values_size << " bytes (" << s_values_size/(1024*1024) << " MB)" << std::endl;
+        cl::Buffer S_values_buf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, s_values_size, &S_values_flat[0]);
+        
+        size_t join_results_size = sizeof(uint32_t) * S_LENGTH * MAX_RIDS_PER_KEY * 2;
+        std::cout << "Creating join_results_buf: " << join_results_size << " bytes (" << join_results_size/(1024*1024*1024) << " GB)" << std::endl;
+        cl::Buffer join_results_buf(context, CL_MEM_READ_WRITE, join_results_size);
+        
+        std::cout << "Creating join_count_buf: " << sizeof(uint32_t) << " bytes" << std::endl;
         cl::Buffer join_count_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t));
         
         // Initialize all buffers to 0
@@ -317,8 +366,8 @@ int main(int argc, char *argv[]) {
         queue.enqueueNDRangeKernel(b4_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
         queue.finish(); // Wait for b4 to complete
 
-        double buildTime = timer.getTimeMicroseconds();
-        std::cout << " completed in " << buildTime << " μs" << std::endl;
+        double buildTime = timer.getTimeMilliseconds();
+        std::cout << " completed in " << buildTime << " ms" << std::endl;
         
         // Probe Phase: Process all S tuples in parallel for each step (p1->p2->p3->p4)
         std::cout << "\n=== Probe Phase (Batch Processing) ===";
@@ -373,8 +422,8 @@ int main(int argc, char *argv[]) {
         queue.enqueueNDRangeKernel(p4_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
         queue.finish(); // Wait for p4 to complete
 
-        double probeTime = timer.getTimeMicroseconds();
-        std::cout << " completed in " << probeTime << " μs" << std::endl;
+        double probeTime = timer.getTimeMilliseconds();
+        std::cout << " completed in " << probeTime << " ms" << std::endl;
         
         // Read back the join results
         std::cout << "\n=== Reading Hash Join Results ===" << std::endl;
@@ -396,21 +445,21 @@ int main(int argc, char *argv[]) {
         int totalRecords = 0;
         
         for(int i = 0; i < R_LENGTH; i++) {
-            std::cout << "R[" << i << "]: (" << R_keys[i];
+            // std::cout << "R[" << i << "]: (" << R_keys[i];
             
-            // Output all values for this tuple
-            for(int j = 0; j < final_R_value_counts[i]; j++) {
-                std::cout << ", " << final_R_values[i * MAX_VALUES_PER_TUPLE + j];
-            }
-            std::cout << ")";
+            // // Output all values for this tuple
+            // for(int j = 0; j < final_R_value_counts[i]; j++) {
+            //     std::cout << ", " << final_R_values[i * MAX_VALUES_PER_TUPLE + j];
+            // }
+            // std::cout << ")";
             
             if(final_R_value_counts[i] > 1) {
-                std::cout << " [JOINED with " << (final_R_value_counts[i] - 1) << " S tuples]";
+                // std::cout << " [JOINED with " << (final_R_value_counts[i] - 1) << " S tuples]";
                 totalJoinedRecords++;
             } else {
-                std::cout << " [NO JOIN]";
+                // std::cout << " [NO JOIN]";
             }
-            std::cout << std::endl;
+            // std::cout << std::endl;
             totalRecords++;
         }
         
@@ -421,9 +470,9 @@ int main(int argc, char *argv[]) {
         
         double totalTime = buildTime + probeTime;
         std::cout << "\n=== Performance Summary ===" << std::endl;
-        std::cout << "Build Phase time: " << buildTime << " μs" << std::endl;
-        std::cout << "Probe Phase time: " << probeTime << " μs" << std::endl;
-        std::cout << "Total execution time: " << totalTime << " μs" << std::endl;
+        std::cout << "Build Phase time: " << buildTime << " ms" << std::endl;
+        std::cout << "Probe Phase time: " << probeTime << " ms" << std::endl;
+        std::cout << "Total execution time: " << totalTime << " ms" << std::endl;
         std::cout << "R table size: " << R_LENGTH << " tuples" << std::endl;
         std::cout << "S table size: " << S_LENGTH << " tuples" << std::endl;
         
@@ -444,7 +493,7 @@ int main(int argc, char *argv[]) {
         
         // Compare all three algorithms
         std::cout << "\n=== Three-Way Algorithm Comparison ===" << std::endl;
-        std::cout << "Algorithm        | Joined Records | Total Joins | Time (μs)" << std::endl;
+        std::cout << "Algorithm        | Joined Records | Total Joins | Time (ms)" << std::endl;
         std::cout << "-----------------|----------------|-------------|----------" << std::endl;
         std::cout << "Standard Hash    | " << std::setw(14) << standard_result.total_joined_records 
                   << " | " << std::setw(11) << standard_result.total_joins << " | " << standard_time << std::endl;
@@ -572,8 +621,8 @@ CPUHashJoinResult run_cpu_hash_join(const std::vector<tuple>& R_input,
         }
     }
     
-    cpu_time = cpu_timer.getTimeMicroseconds();
-    std::cout << "CPU Hash Join completed in " << cpu_time << " μs" << std::endl;
+    cpu_time = cpu_timer.getTimeMilliseconds();
+    std::cout << "CPU Hash Join completed in " << cpu_time << " ms" << std::endl;
     std::cout << "CPU Total joined records: " << total_joined_records << std::endl;
     std::cout << "CPU Total join operations: " << total_joins << std::endl;
     
@@ -632,8 +681,8 @@ StandardHashJoinResult run_standard_hash_join(const std::vector<tuple>& R_input,
         }
     }
     
-    standard_time = standard_timer.getTimeMicroseconds();
-    std::cout << "Standard Hash Join completed in " << standard_time << " μs" << std::endl;
+    standard_time = standard_timer.getTimeMilliseconds();
+    std::cout << "Standard Hash Join completed in " << standard_time << " ms" << std::endl;
     std::cout << "Standard Total joined records: " << total_joined_records << std::endl;
     std::cout << "Standard Total join operations: " << total_joins << std::endl;
     

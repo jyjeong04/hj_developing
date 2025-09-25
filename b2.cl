@@ -1,7 +1,7 @@
 // b2.cl - Build Phase Step 2: Visit the hash bucket header
 // Each work-item updates the totalNum count for its assigned bucket
 
-#define BUCKET_HEADER_NUMBER 64
+#define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024
 
 __kernel void b2_update_bucket_header(
