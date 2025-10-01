@@ -2,8 +2,9 @@
 #include "param.hpp"
 #include "datagen.cpp"
 #include "util.hpp"
- 
 
+#include "cl.hpp"
+#include "device_picker.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -12,11 +13,11 @@
 #include <ctime>
 #include <cstdio>
 #include <cctype>
- 
 #include <ostream>
 #include <vector>
- 
 #include <unordered_map>
+
+ 
 
 static std::vector<JoinedTuple> run_standard_hash_join(const std::vector<Tuple>& R,
         const std::vector<Tuple>& S) {
@@ -50,7 +51,7 @@ uint32_t hash(uint32_t key) {
     return (key * 2654435769U) % (R_LENGTH * 2);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     srand(time(NULL));
     std::vector<BucketHeader> bucketList(R_LENGTH * 2);
     // std::vector<Tuple> R = RGenerator();
@@ -78,29 +79,26 @@ int main() {
         uint32_t id = hash(tmpTuple.key);
         // b2: visit the hash bucket header
         BucketHeader &tmpHeader = bucketList[id];
-        tmpHeader.totalNum++;
         // b3: visit the hash key lists and create a key header if necessary
         int j = 0;
         bool found = false;
-        for(j = 0; j < tmpHeader.totalNum - 1; j++) {
+        for(j = 0; j < tmpHeader.totalNum; j++) {
             if(tmpTuple.key == tmpHeader.keyList[j].key) {
                 found = true;
                 break;
             }
         }
+        tmpHeader.totalNum++;
         
         if(!found) {
             KeyHeader newKey;
             newKey.key = tmpTuple.key;
             tmpHeader.keyList.push_back(newKey);
-            j = tmpHeader.keyList.size() - 1;
         }
         
         // b4: insert the rid into the rid list
         tmpHeader.keyList[j].ridList.push_back(tmpTuple.rid);
     }
-    double step = timer.getTimeMilliseconds();
-    timer.reset();
     for(i = 0; i < S_LENGTH; i++) {
         // p1: compute hash bucket number
         Tuple &tmpTuple = S[i];
@@ -130,7 +128,6 @@ int main() {
     }
 
     std::cout << timer.getTimeMilliseconds() << "ms" << std::endl;
-    std::cout << step << "ms\n";
 
     // Run standard hash join and verify against hash-join result
     util::Timer timer2;
@@ -138,6 +135,107 @@ int main() {
     std::vector<JoinedTuple> stdRes = run_standard_hash_join(R, S);
     double stdMs = timer2.getTimeMilliseconds();
     std::cout << "std_join: " << stdRes.size() << " tuples, " << stdMs << "ms\n";
+
+//===================== OpenCL Join ==========================
+
+    try
+    {
+        cl_uint deviceIndex = 0;
+        
+        // Simple argument parsing: ./hj 1 or --device 1
+        if (argc >= 2) {
+            // Check if it's just a number (simple format)
+            if (argc == 2 && isdigit(argv[1][0])) {
+                deviceIndex = atoi(argv[1]);
+            } else {
+                // Use the original parseArguments for --device format
+                parseArguments(argc, argv, &deviceIndex);
+            }
+        }
+
+        std::vector<cl::Device> devices;
+        unsigned numDevices = getDeviceList(devices);
+
+        if(deviceIndex >= numDevices) {
+            std::cout << "Invalid device index";
+            return EXIT_FAILURE;
+        }
+        
+        cl::Device device = devices[deviceIndex];
+
+        std::string name;
+        getDeviceName(device, name);
+        std::cout << "\nUsing OpenCL Device: " << name << "\n";
+
+        std::vector<cl::Device> chosen_device;
+        chosen_device.push_back(device);
+        cl::Context context(chosen_device);
+        cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE);
+
+        // Load kernel source files using util::loadProgram
+        std::cout << "Loading kernel source files..." << std::endl;
+        std::string b1_source = util::loadProgram("b1.cl");
+        std::string b2_source = util::loadProgram("b2.cl");
+        std::string b3_source = util::loadProgram("b3.cl");
+        std::string b4_source = util::loadProgram("b4.cl");
+        std::string p1_source = util::loadProgram("p1.cl");
+        std::string p2_source = util::loadProgram("p2.cl");
+        std::string p3_source = util::loadProgram("p3.cl");
+        std::string p4_source = util::loadProgram("p4.cl");
+
+        // Create programs and kernels
+        cl::Program b1_program(context, b1_source);
+        cl::Program b2_program(context, b2_source);
+        cl::Program b3_program(context, b3_source);
+        cl::Program b4_program(context, b4_source);
+        cl::Program p1_program(context, p1_source);
+        cl::Program p2_program(context, p2_source);
+        cl::Program p3_program(context, p3_source);
+        cl::Program p4_program(context, p4_source);
+
+    } catch (cl::Error err)
+    {
+        std::cout << "Exception\n";
+        std::cerr << "ERROR: "
+                  << err.what()
+                  << "("
+                  << err_code(err.err())
+                  << ")"
+                  << std::endl;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//===================== OpenCL Join ==========================
 
     // Compare by total count
     bool pass = (res.size() == stdRes.size());
@@ -161,6 +259,7 @@ int main() {
     }
 
     std::cout << "Verification: " << (pass ? "PASS" : "FAIL") << "\n";
+    return 0;
 
 //     // Print a few sample results (up to 20)
 //     std::cout << "RESULT (first up to 20 tuples)\n";

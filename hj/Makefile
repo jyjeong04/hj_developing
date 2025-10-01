@@ -2,7 +2,7 @@ ifndef CPPC
 	CPPC=g++
 endif
 
-CCFLAGS=-O2 -ffast-math
+CCFLAGS=-O2 -pg -ffast-math
 
 LIBS = -lm -lOpenCL -fopenmp
 
