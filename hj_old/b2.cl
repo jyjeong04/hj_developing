@@ -3,6 +3,8 @@
 
 #define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024
+#define MAX_RIDS_PER_KEY 16
+#define MAX_VALUES_PER_TUPLE 16
 
 __kernel void b2_update_bucket_header(
     __global const uint* bucket_ids,     // Input: bucket IDs from b1

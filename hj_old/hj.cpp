@@ -1,4 +1,4 @@
-#define CL_TARGET_OPENCL_VERSION 300
+#define CL_TARGET_OPENCL_VERSION 120
 #define __CL_ENABLE_EXCEPTIONS
 
 #include "cl.hpp"
@@ -274,8 +274,8 @@ int main(int argc, char *argv[]) {
         std::cout << "Creating S_key_indices_buf: " << s_key_indices_size << " bytes (" << s_key_indices_size/(1024*1024) << " MB)" << std::endl;
         cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE, s_key_indices_size);
         
-        // p4 join result buffers (increased size for massive datasets - 4x expansion)
-        const int MAX_VALUES_PER_TUPLE = 2048;
+        // p4 join result buffers (minimized for 16M x 16M dataset)
+        const int MAX_VALUES_PER_TUPLE = 16;
         
         size_t r_values_size = sizeof(uint32_t) * R_LENGTH * MAX_VALUES_PER_TUPLE;
         std::cout << "Creating R_values_buf: " << r_values_size << " bytes (" << r_values_size/(1024*1024*1024) << " GB)" << std::endl;
@@ -321,10 +321,12 @@ int main(int argc, char *argv[]) {
         queue.enqueueWriteBuffer(R_values_buf, CL_TRUE, 0, sizeof(uint32_t) * R_LENGTH * MAX_VALUES_PER_TUPLE, &R_values_init[0]);
 
         // Build Phase: Process all R tuples in parallel for each step (b1->b2->b3->b4)
-        std::cout << "\n=== Build Phase (Batch Processing) ===";
+        std::cout << "\n=== Build Phase (Microsecond Timing) ===";
         timer.reset();
+        util::Timer step_timer;
         
         // b1: compute hash bucket number for ALL R tuples
+        step_timer.reset();
         std::cout << "\n  Step 1/4: Computing hash values for all " << R_LENGTH << " R tuples...";
         b1_kernel.setArg(0, R_keys_buf);
         b1_kernel.setArg(1, hash_values_buf);
@@ -333,8 +335,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(b1_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
         queue.finish(); // Wait for b1 to complete
+        double b1_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << b1_time_us << " μs)";
         
         // b2: update bucket header for ALL R tuples
+        step_timer.reset();
         std::cout << "\n  Step 2/4: Updating bucket headers for all " << R_LENGTH << " R tuples...";
         b2_kernel.setArg(0, bucket_ids_buf);
         b2_kernel.setArg(1, bucket_totalNum_buf);
@@ -342,8 +347,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(b2_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
         queue.finish(); // Wait for b2 to complete
+        double b2_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << b2_time_us << " μs)";
         
         // b3: manage key lists for ALL R tuples
+        step_timer.reset();
         std::cout << "\n  Step 3/4: Managing key lists for all " << R_LENGTH << " R tuples...";
         b3_kernel.setArg(0, R_keys_buf);
         b3_kernel.setArg(1, bucket_ids_buf);
@@ -354,8 +362,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(b3_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
         queue.finish(); // Wait for b3 to complete
+        double b3_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << b3_time_us << " μs)";
         
         // b4: insert record ids for ALL R tuples
+        step_timer.reset();
         std::cout << "\n  Step 4/4: Inserting record IDs for all " << R_LENGTH << " R tuples...";
         b4_kernel.setArg(0, bucket_ids_buf);
         b4_kernel.setArg(1, key_indices_buf);
@@ -365,15 +376,18 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(b4_kernel, cl::NDRange(0), cl::NDRange(R_LENGTH), cl::NullRange);
         queue.finish(); // Wait for b4 to complete
+        double b4_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << b4_time_us << " μs)";
 
         double buildTime = timer.getTimeMilliseconds();
-        std::cout << " completed in " << buildTime << " ms" << std::endl;
+        std::cout << "\nBuild Phase Total: " << std::fixed << std::setprecision(2) << buildTime << " ms (" << buildTime * 1000 << " μs)" << std::endl;
         
         // Probe Phase: Process all S tuples in parallel for each step (p1->p2->p3->p4)
-        std::cout << "\n=== Probe Phase (Batch Processing) ===";
+        std::cout << "\n=== Probe Phase (Microsecond Timing) ===";
         timer.reset();
         
         // p1: compute hash bucket number for ALL S tuples
+        step_timer.reset();
         std::cout << "\n  Step 1/4: Computing hash values for all " << S_LENGTH << " S tuples...";
         p1_kernel.setArg(0, S_keys_buf);
         p1_kernel.setArg(1, S_hash_values_buf);
@@ -382,8 +396,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(p1_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
         queue.finish(); // Wait for p1 to complete
+        double p1_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << p1_time_us << " μs)";
         
         // p2: update bucket header for ALL S tuples (optional)
+        step_timer.reset();
         std::cout << "\n  Step 2/4: Updating bucket headers for all " << S_LENGTH << " S tuples...";
         p2_kernel.setArg(0, S_bucket_ids_buf);
         p2_kernel.setArg(1, bucket_totalNum_buf);
@@ -391,8 +408,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(p2_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
         queue.finish(); // Wait for p2 to complete
+        double p2_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << p2_time_us << " μs)";
         
         // p3: search key lists for ALL S tuples
+        step_timer.reset();
         std::cout << "\n  Step 3/4: Searching key lists for all " << S_LENGTH << " S tuples...";
         p3_kernel.setArg(0, S_keys_buf);
         p3_kernel.setArg(1, S_bucket_ids_buf);
@@ -404,8 +424,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(p3_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
         queue.finish(); // Wait for p3 to complete
+        double p3_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << p3_time_us << " μs)";
         
         // p4: join matching records for ALL S tuples
+        step_timer.reset();
         std::cout << "\n  Step 4/4: Joining matching records for all " << S_LENGTH << " S tuples...";
         p4_kernel.setArg(0, S_values_buf);
         p4_kernel.setArg(1, S_bucket_ids_buf);
@@ -421,9 +444,11 @@ int main(int argc, char *argv[]) {
         
         queue.enqueueNDRangeKernel(p4_kernel, cl::NDRange(0), cl::NDRange(S_LENGTH), cl::NullRange);
         queue.finish(); // Wait for p4 to complete
+        double p4_time_us = step_timer.getTimeMicroseconds();
+        std::cout << " (" << std::fixed << std::setprecision(2) << p4_time_us << " μs)";
 
         double probeTime = timer.getTimeMilliseconds();
-        std::cout << " completed in " << probeTime << " ms" << std::endl;
+        std::cout << "\nProbe Phase Total: " << std::fixed << std::setprecision(2) << probeTime << " ms (" << probeTime * 1000 << " μs)" << std::endl;
         
         // Read back the join results
         std::cout << "\n=== Reading Hash Join Results ===" << std::endl;
@@ -502,7 +527,7 @@ int main(int argc, char *argv[]) {
         std::cout << "OpenCL Hash      | " << std::setw(14) << joined_records_count 
                   << " | " << std::setw(11) << final_join_count[0] << " | " << totalTime << std::endl;
         
-        // Validate OpenCL results against CPU results
+        // // Validate OpenCL results against CPU results
         bool validation_result = validate_results(
             cpu_result,
             R_keys,              // OpenCL R keys

@@ -6,7 +6,7 @@ CCFLAGS=-O2 -ffast-math
 
 LIBS = -lm -lOpenCL -fopenmp
 
-COMMON_DIR = ../Cpp_common
+COMMON_DIR = Cpp_common
 
 INC = -I $(COMMON_DIR)
 

@@ -4,6 +4,7 @@
 #define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024
 #define MAX_RIDS_PER_KEY 16    // Maximum number of record IDs per key
+#define MAX_VALUES_PER_TUPLE 16
 
 __kernel void b4_insert_record_ids(
     __global const uint* bucket_ids,      // Input: bucket IDs from b1

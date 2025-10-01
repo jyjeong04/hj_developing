@@ -3,6 +3,8 @@
 
 #define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024  // Maximum number of unique keys per bucket
+#define MAX_RIDS_PER_KEY 16
+#define MAX_VALUES_PER_TUPLE 16
 
 __kernel void b3_manage_key_lists(
     __global const uint* R_keys,         // Input: R table keys

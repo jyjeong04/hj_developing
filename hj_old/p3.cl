@@ -3,6 +3,8 @@
 
 #define BUCKET_HEADER_NUMBER 512
 #define MAX_KEYS_PER_BUCKET 1024
+#define MAX_RIDS_PER_KEY 16
+#define MAX_VALUES_PER_TUPLE 16
 
 __kernel void p3_search_key_lists(
     __global const uint* S_keys,         // Input: S table keys
