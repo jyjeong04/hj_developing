@@ -74,7 +74,8 @@ int main() {
     timer.reset();
     for(i = 0; i < R_LENGTH; i++) {
         // b1: compute hash bucket number
-        uint32_t id = hash(R[i].key);
+        Tuple &tmpTuple = R[i];
+        uint32_t id = hash(tmpTuple.key);
         // b2: visit the hash bucket header
         BucketHeader &tmpHeader = bucketList[id];
         tmpHeader.totalNum++;
@@ -82,7 +83,7 @@ int main() {
         int j = 0;
         bool found = false;
         for(j = 0; j < tmpHeader.totalNum - 1; j++) {
-            if(R[i].key == tmpHeader.keyList[j].key) {
+            if(tmpTuple.key == tmpHeader.keyList[j].key) {
                 found = true;
                 break;
             }
@@ -90,26 +91,27 @@ int main() {
         
         if(!found) {
             KeyHeader newKey;
-            newKey.key = R[i].key;
+            newKey.key = tmpTuple.key;
             tmpHeader.keyList.push_back(newKey);
             j = tmpHeader.keyList.size() - 1;
         }
         
         // b4: insert the rid into the rid list
-        tmpHeader.keyList[j].ridList.push_back(R[i].rid);
+        tmpHeader.keyList[j].ridList.push_back(tmpTuple.rid);
     }
     double step = timer.getTimeMilliseconds();
     timer.reset();
     for(i = 0; i < S_LENGTH; i++) {
         // p1: compute hash bucket number
-        uint32_t id = hash(S[i].key);
+        Tuple &tmpTuple = S[i];
+        uint32_t id = hash(tmpTuple.key);
         // p2: visit the hash bucket header
         BucketHeader &tmpHeader = bucketList[id];
         // p3: visit the hash key lists
         int j = 0;
         bool found = false;
         for(j = 0; j < tmpHeader.totalNum; j++) {
-            if(S[i].key == tmpHeader.keyList[j].key) {
+            if(tmpTuple.key == tmpHeader.keyList[j].key) {
                 found = true;
                 break;
             }
@@ -119,9 +121,9 @@ int main() {
         if(found) {
             for(int h = 0; h < tmpHeader.keyList[j].ridList.size(); h++) {
                 JoinedTuple t;
-                t.key = S[i].key;
+                t.key = tmpTuple.key;
                 t.ridR = tmpHeader.keyList[j].ridList[h];
-                t.ridS = S[i].rid;
+                t.ridS = tmpTuple.rid;
                 res.push_back(t);
             }
         }

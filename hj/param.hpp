@@ -1,6 +1,7 @@
 #pragma once
 
-#define R_LENGTH 65536
+// #define R_LENGTH 65536
+#define R_LENGTH 16777216
 #define S_LENGTH 16777216
 
 #define CL_TARGET_OPENCL_VERSION 120
