@@ -1,6 +1,8 @@
 #pragma once
 
 #include "param.hpp"
+#include "cl.hpp"
+#include <CL/cl_platform.h>
 #include <array>
 #include <cstdint>
 #include <iostream>

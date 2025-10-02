@@ -5,6 +5,7 @@
 
 #include "cl.hpp"
 #include "device_picker.hpp"
+#include <CL/cl.h>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -48,23 +49,23 @@ static std::vector<JoinedTuple> run_standard_hash_join(const std::vector<Tuple>&
 }
 
 uint32_t hash(uint32_t key) {
-    return (key * 2654435769U) % (R_LENGTH * 2);
+    return (key * 2654435769U) % (BUCKET_HEADER_NUMBER);
 }
 
 int main(int argc, char *argv[]) {
     srand(time(NULL));
-    std::vector<BucketHeader> bucketList(R_LENGTH * 2);
+    std::vector<BucketHeader> bucketList(BUCKET_HEADER_NUMBER);
     // std::vector<Tuple> R = RGenerator();
     // std::vector<Tuple> S = SGenerator(R);
     std::vector<Tuple> R(R_LENGTH);
     std::vector<Tuple> S(S_LENGTH);
     int i;
     for(i = 0; i < R_LENGTH; i++) {
-        R[i].key = rand() % R_LENGTH;
+        R[i].key = rand() % R_LENGTH + 1;
         R[i].rid = rand() % 1024;
     }
     for(i = 0; i < S_LENGTH; i++) {
-        S[i].key = rand() % R_LENGTH;
+        S[i].key = rand() % R_LENGTH + 1;
         S[i].rid = rand() % 1024;
     }
     std::vector<JoinedTuple> res;
@@ -88,7 +89,6 @@ int main(int argc, char *argv[]) {
                 break;
             }
         }
-        tmpHeader.totalNum++;
         
         if(!found) {
             KeyHeader newKey;
@@ -136,7 +136,7 @@ int main(int argc, char *argv[]) {
     double stdMs = timer2.getTimeMilliseconds();
     std::cout << "std_join: " << stdRes.size() << " tuples, " << stdMs << "ms\n";
 
-//===================== OpenCL Join ==========================
+// ===================== OpenCL Join ==========================
 
     try
     {
@@ -172,26 +172,77 @@ int main(int argc, char *argv[]) {
         cl::Context context(chosen_device);
         cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE);
 
-        // Load kernel source files using util::loadProgram
-        std::cout << "Loading kernel source files..." << std::endl;
-        std::string b1_source = util::loadProgram("b1.cl");
-        std::string b2_source = util::loadProgram("b2.cl");
-        std::string b3_source = util::loadProgram("b3.cl");
-        std::string b4_source = util::loadProgram("b4.cl");
-        std::string p1_source = util::loadProgram("p1.cl");
-        std::string p2_source = util::loadProgram("p2.cl");
-        std::string p3_source = util::loadProgram("p3.cl");
-        std::string p4_source = util::loadProgram("p4.cl");
-
         // Create programs and kernels
-        cl::Program b1_program(context, b1_source);
-        cl::Program b2_program(context, b2_source);
-        cl::Program b3_program(context, b3_source);
-        cl::Program b4_program(context, b4_source);
-        cl::Program p1_program(context, p1_source);
-        cl::Program p2_program(context, p2_source);
-        cl::Program p3_program(context, p3_source);
-        cl::Program p4_program(context, p4_source);
+        cl::Program b1_program(context, util::loadProgram("b1.cl"), true);
+        cl::Program b2_program(context, util::loadProgram("b2.cl"), true);
+        cl::Program b3_program(context, util::loadProgram("b3.cl"), true);
+        cl::Program b4_program(context, util::loadProgram("b4.cl"), true);
+        cl::Program p1_program(context, util::loadProgram("p1.cl"), true);
+        cl::Program p2_program(context, util::loadProgram("p2.cl"), true);
+        cl::Program p3_program(context, util::loadProgram("p3.cl"), true);
+        cl::Program p4_program(context, util::loadProgram("p4.cl"), true);
+
+        cl::make_kernel<cl::Buffer, cl::Buffer> b1(b1_program, "b1");
+        cl::make_kernel<cl::Buffer, cl::Buffer> b2(b2_program, "b2");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(b3_program, "b3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(b4_program, "b4");
+        cl::make_kernel<cl::Buffer, cl::Buffer> p1(p1_program, "p1");
+        cl::make_kernel<cl::Buffer, cl::Buffer> p2(p2_program, "p2");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p3(p3_program, "p3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p4(p4_program, "p4");
+
+        std::vector<uint32_t> R_keys(R_LENGTH), R_rids(R_LENGTH), S_keys(S_LENGTH), S_rids(S_LENGTH);
+        for(int i = 0; i < R_LENGTH; i++) {
+            R_keys[i] = R[i].key;
+            R_rids[i] = R[i].rid;
+        }
+        for(int i = 0; i < S_LENGTH; i++) {
+            S_keys[i] = S[i].key;
+            S_rids[i] = S[i].rid;
+        }
+
+        // buffer init
+        cl::Buffer R_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_keys[0]);
+        cl::Buffer S_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_keys[0]);
+        cl::Buffer R_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_rids[0]);
+        cl::Buffer S_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_rids[0]);
+        
+        // b1
+        cl::Buffer R_bucket_ids_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * R_LENGTH);
+
+        // b2
+        cl::Buffer R_bucket_totalNum_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
+
+        // b3
+        cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
+        cl::Buffer bucket_key_counts_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
+        cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH);
+
+        // b4
+        cl::Buffer bucket_key_rids_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY);
+        cl::Buffer bucket_key_rid_counts_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
+
+        // p1
+        cl::Buffer S_bucket_ids_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
+        
+        // p2
+
+        // p3
+        cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(int) * S_LENGTH);
+        cl::Buffer S_match_found_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
+
+        // p4
+        cl::Buffer result_key_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH / 4);
+        cl::Buffer result_rid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH / 4);
+        cl::Buffer result_sid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH / 4);
+        cl::Buffer result_idx_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t));
+
+        std::vector<uint32_t> bucket_totalNumcounts(BUCKET_HEADER_NUMBER, 0);
+        std::vector<uint32_t> bucket_key_count
+
+        
+
+
 
     } catch (cl::Error err)
     {
@@ -235,7 +286,7 @@ int main(int argc, char *argv[]) {
 
 
 
-//===================== OpenCL Join ==========================
+//===================== OpenCL Join End ==========================
 
     // Compare by total count
     bool pass = (res.size() == stdRes.size());
