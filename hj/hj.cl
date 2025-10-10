@@ -9,7 +9,7 @@ __kernel void b1(
     if(gid >= R_LENGTH) {
         return;
     }
-    uint h = R_keys[gid] * HASH_SEED % (R_LENGTH * 2);
+    uint h = R_keys[gid] * HASH_SEED % (BUCKET_HEADER_NUMBER);
     bucket_ids[gid] = h;
 }
 
@@ -44,11 +44,24 @@ __kernel void b3(
     uint bucket_offset = bucket_id * MAX_KEYS_PER_BUCKET;
     for (int i = 0; i < MAX_KEYS_PER_BUCKET; i++) {
         uint current_key = bucket_keys[bucket_offset + i];
+
+        // if(current_key == 0) {
+        //     if(atomic_cmpxchg(&bucket_keys[bucket_offset + i], 0, key) == 0) {
+        //         atomic_inc(&bucket_key_counts[bucket_id]);
+        //         key_idx = i;
+        //         break;
+        //     }
+        //     i--;
+        // } else if (current_key == key) {
+        //     key_idx = i;
+        //     break;
+        // }
+
         if(current_key == key) {
             key_idx = i;
             break;
-        } else if (current_key == 0) {
-            if(atomic_cmpxchg(&bucket_keys[bucket_offset + i], 0, key) == 0) {
+        } else if (current_key == 0xffffffffu) {
+            if(atomic_cmpxchg(&bucket_keys[bucket_offset + i], 0xffffffffu, key) == 0xffffffffu) {
                 atomic_inc(&bucket_key_counts[bucket_id]);
                 key_idx = i;
                 break;
@@ -61,6 +74,7 @@ __kernel void b3(
 }
 
 __kernel void b4(
+    __global const uint* R_rids,
     __global const uint* bucket_ids,
     __global const int* key_indices,
     __global uint* bucket_key_rids,
@@ -82,8 +96,7 @@ __kernel void b4(
     uint rid_count = atomic_inc(&bucket_key_rid_counts[bucket_key_offset]);
 
     if(rid_count < MAX_RIDS_PER_KEY) {
-        uint rid_offset = bucket_key_offset * MAX_RIDS_PER_KEY + rid_count;
-        bucket_key_rids[rid_offset] = gid;
+        bucket_key_rids[bucket_key_offset * MAX_RIDS_PER_KEY + rid_count] = R_rids[gid];
     }
 }
 
@@ -95,19 +108,23 @@ __kernel void p1(
     if(gid >= S_LENGTH) {
         return;
     }
-    uint h = S_keys[gid] * HASH_SEED % (R_LENGTH * 2);
+    uint h = S_keys[gid] * HASH_SEED % (BUCKET_HEADER_NUMBER);
     bucket_ids[gid] = h;
 }
 
 __kernel void p2(
-    __global const uint* bucket_ids,
-    __global uint* bucket_totalNum
+    __global uint* bucket_ids,
+    __global uint* bucket_total
 ) {
     uint gid = get_global_id(0);
     
     // Check bounds
     if (gid >= S_LENGTH) {
         return;
+    }
+    uint bucket_id = bucket_ids[gid];
+    if(!bucket_total[bucket_id]) {
+        bucket_ids[gid] = 0xffffffff;
     }
 }
 
@@ -123,9 +140,12 @@ __kernel void p3(
     if(gid >= S_LENGTH) {
         return;
     }
+    uint bucket_id = bucket_ids[gid];
+    if(bucket_id == 0xffffffff) {
+        return;
+    }
 
     uint key = S_keys[gid];
-    uint bucket_id = bucket_ids[gid];
 
     bool found = false;
     int key_idx = -1;
@@ -161,6 +181,10 @@ __kernel void p4(
     if(gid >= S_LENGTH) {
         return;
     }
+    uint bucket_id = bucket_ids[gid];
+    if(bucket_id == 0xffffffff) {
+        return;
+    }
     if(match_found[gid] == 0) {
         return;
     }
@@ -168,7 +192,6 @@ __kernel void p4(
     if(key_idx < 0 || key_idx >= MAX_KEYS_PER_BUCKET) {
         return;
     }
-    uint bucket_id = bucket_ids[gid];
 
     uint bucket_key_offset = bucket_id * MAX_KEYS_PER_BUCKET + key_idx;
     if(bucket_key_offset >= R_LENGTH * 2 * MAX_KEYS_PER_BUCKET) {

@@ -54,88 +54,111 @@ uint32_t hash(uint32_t key) {
 
 int main(int argc, char *argv[]) {
     srand(time(NULL));
+    
+    // Parse arguments: ./hj [device_index] [--skip-cpu] [--skip-std] [--help]
+    bool run_cpu_join = true;
+    bool run_std_join = true;
+    
+    for(int arg_i = 1; arg_i < argc; arg_i++) {
+        if(strcmp(argv[arg_i], "--skip-cpu") == 0) {
+            run_cpu_join = false;
+        } else if(strcmp(argv[arg_i], "--skip-std") == 0) {
+            run_std_join = false;
+        } else if(strcmp(argv[arg_i], "--help") == 0 || strcmp(argv[arg_i], "-h") == 0) {
+            std::cout << "Usage: " << argv[0] << " [device_index] [options]\n"
+                      << "Options:\n"
+                      << "  --skip-cpu     Skip CPU hash join\n"
+                      << "  --skip-std     Skip standard hash join\n"
+                      << "  --help, -h     Show this help message\n"
+                      << "\nExample:\n"
+                      << "  " << argv[0] << " 0              # Run all joins on GPU device 0\n"
+                      << "  " << argv[0] << " 0 --skip-cpu   # Run only standard and OpenCL joins\n"
+                      << "  " << argv[0] << " 1 --skip-std   # Run only CPU and OpenCL joins on CPU device\n";
+            return 0;
+        }
+    }
+    
     std::vector<BucketHeader> bucketList(BUCKET_HEADER_NUMBER);
-    // std::vector<Tuple> R = RGenerator();
-    // std::vector<Tuple> S = SGenerator(R);
-    std::vector<Tuple> R(R_LENGTH);
-    std::vector<Tuple> S(S_LENGTH);
-    int i;
-    for(i = 0; i < R_LENGTH; i++) {
-        R[i].key = rand() % R_LENGTH + 1;
-        R[i].rid = rand() % 1024;
-    }
-    for(i = 0; i < S_LENGTH; i++) {
-        S[i].key = rand() % R_LENGTH + 1;
-        S[i].rid = rand() % 1024;
-    }
+    
+    // Generate datasets using datagen.cpp functions
+    std::vector<Tuple> R = RGenerator();
+    std::vector<Tuple> S = SGenerator(R);
+    
     std::vector<JoinedTuple> res;
-    res.reserve(S_LENGTH / 4);
 
     util::Timer timer;
 
-    timer.reset();
-    for(i = 0; i < R_LENGTH; i++) {
-        // b1: compute hash bucket number
-        Tuple &tmpTuple = R[i];
-        uint32_t id = hash(tmpTuple.key);
-        // b2: visit the hash bucket header
-        BucketHeader &tmpHeader = bucketList[id];
-        // b3: visit the hash key lists and create a key header if necessary
-        int j = 0;
-        bool found = false;
-        for(j = 0; j < tmpHeader.totalNum; j++) {
-            if(tmpTuple.key == tmpHeader.keyList[j].key) {
-                found = true;
-                break;
+    // CPU-based Hash Join
+    if(run_cpu_join) {
+        std::cout << "=== CPU Hash Join ===\n";
+        timer.reset();
+        for(int i = 0; i < R_LENGTH; i++) {
+            // b1: compute hash bucket number
+            Tuple &tmpTuple = R[i];
+            uint32_t id = hash(tmpTuple.key);
+            // b2: visit the hash bucket header
+            BucketHeader &tmpHeader = bucketList[id];
+            // b3: visit the hash key lists and create a key header if necessary
+            int j = 0;
+            bool found = false;
+            for(j = 0; j < tmpHeader.totalNum; j++) {
+                if(tmpTuple.key == tmpHeader.keyList[j].key) {
+                    found = true;
+                    break;
+                }
             }
+            tmpHeader.totalNum++;
+            if(!found) {
+                KeyHeader newKey;
+                newKey.key = tmpTuple.key;
+                tmpHeader.keyList.push_back(newKey);
+            }
+            
+            // b4: insert the rid into the rid list
+            tmpHeader.keyList[j].ridList.push_back(tmpTuple.rid);
         }
-        tmpHeader.totalNum++;
-        if(!found) {
-            KeyHeader newKey;
-            newKey.key = tmpTuple.key;
-            tmpHeader.keyList.push_back(newKey);
-        }
-        
-        // b4: insert the rid into the rid list
-        tmpHeader.keyList[j].ridList.push_back(tmpTuple.rid);
-    }
-    for(i = 0; i < S_LENGTH; i++) {
-        // p1: compute hash bucket number
-        Tuple &tmpTuple = S[i];
-        uint32_t id = hash(tmpTuple.key);
-        // p2: visit the hash bucket header
-        BucketHeader &tmpHeader = bucketList[id];
-        if(!tmpHeader.totalNum) continue;
-        // p3: visit the hash key lists
-        int j = 0;
-        bool found = false;
-        for(j = 0; j < tmpHeader.totalNum; j++) {
-            if(tmpTuple.key == tmpHeader.keyList[j].key) {
-                found = true;
-                break;
+        for(int i = 0; i < S_LENGTH; i++) {
+            // p1: compute hash bucket number
+            Tuple &tmpTuple = S[i];
+            uint32_t id = hash(tmpTuple.key);
+            // p2: visit the hash bucket header
+            BucketHeader &tmpHeader = bucketList[id];
+            if(!tmpHeader.totalNum) continue;
+            // p3: visit the hash key lists
+            int j = 0;
+            bool found = false;
+            for(j = 0; j < tmpHeader.totalNum; j++) {
+                if(tmpTuple.key == tmpHeader.keyList[j].key) {
+                    found = true;
+                    break;
+                }
+            }
+
+            // p4: visit the matching build tuple to compare keys and produce output tuple
+            if(found) {
+                for(int h = 0; h < tmpHeader.keyList[j].ridList.size(); h++) {
+                    JoinedTuple t;
+                    t.key = tmpTuple.key;
+                    t.ridR = tmpHeader.keyList[j].ridList[h];
+                    t.ridS = tmpTuple.rid;
+                    res.push_back(t);
+                }
             }
         }
 
-        // p4: visit the matching build tuple to compare keys and produce output tuple
-        if(found) {
-            for(int h = 0; h < tmpHeader.keyList[j].ridList.size(); h++) {
-                JoinedTuple t;
-                t.key = tmpTuple.key;
-                t.ridR = tmpHeader.keyList[j].ridList[h];
-                t.ridS = tmpTuple.rid;
-                res.push_back(t);
-            }
-        }
+        std::cout << "CPU Join: " << res.size() << " tuples, " << timer.getTimeMilliseconds() << "ms" << std::endl;
     }
-
-    std::cout << timer.getTimeMilliseconds() << "ms" << std::endl;
 
     // Run standard hash join and verify against hash-join result
-    util::Timer timer2;
-    timer2.reset();
-    std::vector<JoinedTuple> stdRes = run_standard_hash_join(R, S);
-    double stdMs = timer2.getTimeMilliseconds();
-    std::cout << "std_join: " << stdRes.size() << " tuples, " << stdMs << "ms\n";
+    std::vector<JoinedTuple> stdRes;
+    if(run_std_join) {
+        std::cout << "\n=== Standard Hash Join ===" << std::endl;
+        util::Timer timer2;
+        timer2.reset();
+        stdRes = run_standard_hash_join(R, S);
+        double stdMs = timer2.getTimeMilliseconds();
+        std::cout << "Standard Join: " << stdRes.size() << " tuples, " << stdMs << "ms\n";
+    }
 
 // ===================== OpenCL Join ==========================
 
@@ -174,23 +197,16 @@ int main(int argc, char *argv[]) {
         cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE);
 
         // Create programs and kernels
-        cl::Program b1_program(context, util::loadProgram("b1.cl"), true);
-        cl::Program b2_program(context, util::loadProgram("b2.cl"), true);
-        cl::Program b3_program(context, util::loadProgram("b3.cl"), true);
-        cl::Program b4_program(context, util::loadProgram("b4.cl"), true);
-        cl::Program p1_program(context, util::loadProgram("p1.cl"), true);
-        cl::Program p2_program(context, util::loadProgram("p2.cl"), true);
-        cl::Program p3_program(context, util::loadProgram("p3.cl"), true);
-        cl::Program p4_program(context, util::loadProgram("p4.cl"), true);
+        cl::Program program(context, util::loadProgram("hj.cl"), true);
 
-        cl::make_kernel<cl::Buffer, cl::Buffer> b1(b1_program, "b1");
-        cl::make_kernel<cl::Buffer, cl::Buffer> b2(b2_program, "b2");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(b3_program, "b3");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(b4_program, "b4");
-        cl::make_kernel<cl::Buffer, cl::Buffer> p1(p1_program, "p1");
-        cl::make_kernel<cl::Buffer, cl::Buffer> p2(p2_program, "p2");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p3(p3_program, "p3");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p4(p4_program, "p4");
+        cl::make_kernel<cl::Buffer, cl::Buffer> b1(program, "b1");
+        cl::make_kernel<cl::Buffer, cl::Buffer> b2(program, "b2");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(program, "b3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(program, "b4");
+        cl::make_kernel<cl::Buffer, cl::Buffer> p1(program, "p1");
+        cl::make_kernel<cl::Buffer, cl::Buffer> p2(program, "p2");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p3(program, "p3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p4(program, "p4");
 
         std::vector<uint32_t> R_keys(R_LENGTH), R_rids(R_LENGTH), S_keys(S_LENGTH), S_rids(S_LENGTH);
         for(int i = 0; i < R_LENGTH; i++) {
@@ -203,16 +219,16 @@ int main(int argc, char *argv[]) {
         }
 
         // buffer init
-        cl::Buffer R_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_keys[0]);
-        cl::Buffer S_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_keys[0]);
-        cl::Buffer R_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_rids[0]);
-        cl::Buffer S_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_rids[0]);
+        cl::Buffer R_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_keys[0]);
+        cl::Buffer S_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_keys[0]);
+        cl::Buffer R_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(uint32_t) * R_LENGTH, &R_rids[0]);
+        cl::Buffer S_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(uint32_t) * S_LENGTH, &S_rids[0]);
         
         // b1
         cl::Buffer R_bucket_ids_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * R_LENGTH);
 
         // b2
-        cl::Buffer R_bucket_totalNum_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
+        cl::Buffer bucket_total_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
 
         // b3
         cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
@@ -232,18 +248,133 @@ int main(int argc, char *argv[]) {
         cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(int) * S_LENGTH);
         cl::Buffer S_match_found_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
 
-        // p4
-        cl::Buffer result_key_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH / 4);
-        cl::Buffer result_rid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH / 4);
-        cl::Buffer result_sid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH / 4);
+        // p4 - Allocate enough space for potential results
+        // Use S_LENGTH * 2 as a reasonable upper bound (observed ~S_LENGTH results)
+        size_t max_result_size = (size_t)S_LENGTH * 2;
+        cl::Buffer result_key_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
+        cl::Buffer result_rid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
+        cl::Buffer result_sid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
         cl::Buffer result_idx_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t));
 
         std::vector<uint32_t> bucket_totalNumcounts(BUCKET_HEADER_NUMBER, 0);
-        std::vector<uint32_t> bucket_key_count
+        std::vector<uint32_t> bucket_key_counts_init(BUCKET_HEADER_NUMBER, 0);
+        std::vector<uint32_t> result_idx_init(1, 0);
 
+        // Initialize buffers to zero
+        queue.enqueueWriteBuffer(bucket_total_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_totalNumcounts[0]);
+        queue.enqueueWriteBuffer(bucket_key_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_key_counts_init[0]);
+        queue.enqueueWriteBuffer(result_idx_buf, CL_TRUE, 0, sizeof(uint32_t), &result_idx_init[0]);
         
+        // Zero-initialize large buffers
+        std::vector<uint32_t> bucket_keys_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0xffffffffu);
+        std::vector<uint32_t> bucket_key_rid_counts_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0);
+        queue.enqueueWriteBuffer(bucket_keys_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_keys_init[0]);
+        queue.enqueueWriteBuffer(bucket_key_rid_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_key_rid_counts_init[0]);
 
+        util::Timer opencl_timer;
+        opencl_timer.reset();
 
+        // Build Phase
+        std::cout << "\n=== OpenCL Build Phase ===" << std::endl;
+        
+        // b1: compute hash bucket number
+        b1(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf, R_bucket_ids_buf);
+        queue.finish();
+        
+        // b2: update bucket header
+        b2(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_bucket_ids_buf, bucket_total_buf);
+        
+        // b3: manage key lists
+        b3(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), 
+            R_keys_buf, R_bucket_ids_buf, bucket_keys_buf, 
+            bucket_key_counts_buf, key_indices_buf);
+        
+        // b4: insert record ids
+        b4(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), 
+            R_rids_buf, R_bucket_ids_buf, key_indices_buf, 
+            bucket_key_rids_buf, bucket_key_rid_counts_buf);
+        queue.finish();
+
+        // Probe Phase
+        std::cout << "=== OpenCL Probe Phase ===" << std::endl;
+        
+        // p1: compute hash bucket number
+        p1(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf, S_bucket_ids_buf);
+        
+        // p2: check bucket validity
+        p2(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_bucket_ids_buf, bucket_total_buf);
+        
+        // p3: search key lists
+        p3(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
+            S_keys_buf, S_bucket_ids_buf, bucket_keys_buf, 
+            bucket_key_counts_buf, S_key_indices_buf, S_match_found_buf);
+
+        // p4: join matching records
+        p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
+            S_keys_buf, S_rids_buf, S_key_indices_buf, S_match_found_buf,
+            bucket_key_rids_buf, bucket_key_rid_counts_buf, S_bucket_ids_buf,
+            result_key_buf, result_rid_buf, result_sid_buf, result_idx_buf);
+        queue.finish();
+
+        double opencl_time = opencl_timer.getTimeMilliseconds();
+        std::cout << "OpenCL Join Total: " << opencl_time << " ms" << std::endl;
+
+        // Read back results
+        std::vector<uint32_t> result_count(1);
+        queue.enqueueReadBuffer(result_idx_buf, CL_TRUE, 0, sizeof(uint32_t), &result_count[0]);
+        
+        uint32_t num_results = result_count[0];
+        
+        // Safety check: ensure we don't exceed allocated buffer size
+        if(num_results > max_result_size) {
+            std::cout << "WARNING: Result count (" << num_results << ") exceeds allocated buffer size (" << max_result_size << ")" << std::endl;
+            num_results = max_result_size;
+        }
+        
+        std::cout << "OpenCL produced " << num_results << " joined tuples" << std::endl;
+
+        if(num_results > 0) {
+            std::vector<uint32_t> result_keys(num_results);
+            std::vector<uint32_t> result_rids(num_results);
+            std::vector<uint32_t> result_sids(num_results);
+            
+            queue.enqueueReadBuffer(result_key_buf, CL_TRUE, 0, sizeof(uint32_t) * num_results, &result_keys[0]);
+            queue.enqueueReadBuffer(result_rid_buf, CL_TRUE, 0, sizeof(uint32_t) * num_results, &result_rids[0]);
+            queue.enqueueReadBuffer(result_sid_buf, CL_TRUE, 0, sizeof(uint32_t) * num_results, &result_sids[0]);
+            
+            // Convert to JoinedTuple format
+            std::vector<JoinedTuple> opencl_res;
+            opencl_res.reserve(num_results);
+            for(uint32_t i = 0; i < num_results; i++) {
+                JoinedTuple jt;
+                jt.key = result_keys[i];
+                jt.ridR = result_rids[i];
+                jt.ridS = result_sids[i];
+                opencl_res.push_back(jt);
+            }
+
+            // Compare OpenCL result with Standard join result
+            if(run_std_join) {
+                bool opencl_pass = (opencl_res.size() == stdRes.size());
+                if(opencl_pass) {
+                    std::unordered_map<uint32_t, uint64_t> openclKeyCount;
+                    std::unordered_map<uint32_t, uint64_t> stdKeyCount;
+                    openclKeyCount.reserve(R_LENGTH);
+                    stdKeyCount.reserve(R_LENGTH);
+                    for(const auto &jt : opencl_res) openclKeyCount[jt.key]++;
+                    for(const auto &jt : stdRes) stdKeyCount[jt.key]++;
+                    if(openclKeyCount.size() != stdKeyCount.size()) {
+                        opencl_pass = false;
+                    } else {
+                        for(const auto &kv : openclKeyCount) {
+                            auto it = stdKeyCount.find(kv.first);
+                            if(it == stdKeyCount.end() || it->second != kv.second) { opencl_pass = false; break; }
+                        }
+                    }
+                }
+                std::cout << "OpenCL Verification: " << (opencl_pass ? "PASS" : "FAIL") << "\n";
+            }
+        }
 
     } catch (cl::Error err)
     {
@@ -289,28 +420,32 @@ int main(int argc, char *argv[]) {
 
 //===================== OpenCL Join End ==========================
 
-    // Compare by total count
-    bool pass = (res.size() == stdRes.size());
+    // Verification: Compare CPU join with Standard join
+    if(run_cpu_join && run_std_join) {
+        std::cout << "\n=== Verification (CPU vs Standard) ===" << std::endl;
+        bool pass = (res.size() == stdRes.size());
 
-    // Compare by per-key counts
-    if(pass) {
-        std::unordered_map<uint32_t, uint64_t> resKeyCount;
-        std::unordered_map<uint32_t, uint64_t> stdKeyCount;
-        resKeyCount.reserve(R_LENGTH);
-        stdKeyCount.reserve(R_LENGTH);
-        for(const auto &jt : res) resKeyCount[jt.key]++;
-        for(const auto &jt : stdRes) stdKeyCount[jt.key]++;
-        if(resKeyCount.size() != stdKeyCount.size()) {
-            pass = false;
-        } else {
-            for(const auto &kv : resKeyCount) {
-                auto it = stdKeyCount.find(kv.first);
-                if(it == stdKeyCount.end() || it->second != kv.second) { pass = false; break; }
+        // Compare by per-key counts
+        if(pass) {
+            std::unordered_map<uint32_t, uint64_t> resKeyCount;
+            std::unordered_map<uint32_t, uint64_t> stdKeyCount;
+            resKeyCount.reserve(R_LENGTH);
+            stdKeyCount.reserve(R_LENGTH);
+            for(const auto &jt : res) resKeyCount[jt.key]++;
+            for(const auto &jt : stdRes) stdKeyCount[jt.key]++;
+            if(resKeyCount.size() != stdKeyCount.size()) {
+                pass = false;
+            } else {
+                for(const auto &kv : resKeyCount) {
+                    auto it = stdKeyCount.find(kv.first);
+                    if(it == stdKeyCount.end() || it->second != kv.second) { pass = false; break; }
+                }
             }
         }
-    }
 
-    std::cout << "Verification: " << (pass ? "PASS" : "FAIL") << "\n";
+        std::cout << "Verification: " << (pass ? "PASS" : "FAIL") << "\n";
+    }
+    
     return 0;
 
 //     // Print a few sample results (up to 20)
