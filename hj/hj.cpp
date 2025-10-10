@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
                 break;
             }
         }
-        
+        tmpHeader.totalNum++;
         if(!found) {
             KeyHeader newKey;
             newKey.key = tmpTuple.key;
@@ -105,6 +105,7 @@ int main(int argc, char *argv[]) {
         uint32_t id = hash(tmpTuple.key);
         // p2: visit the hash bucket header
         BucketHeader &tmpHeader = bucketList[id];
+        if(!tmpHeader.totalNum) continue;
         // p3: visit the hash key lists
         int j = 0;
         bool found = false;
