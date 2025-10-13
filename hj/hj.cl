@@ -15,8 +15,6 @@ __kernel void b2(__global const uint *bucket_ids, __global uint *bucket_total) {
   if (gid >= R_LENGTH) {
     return;
   }
-  uint bucket_id = bucket_ids[gid];
-  atomic_inc(&bucket_total[bucket_id]);
 }
 
 __kernel void b3(__global const uint *R_keys, __global uint *bucket_ids,
@@ -119,10 +117,6 @@ __kernel void p2(__global uint *bucket_ids, __global uint *bucket_total) {
   if (gid >= S_LENGTH) {
     return;
   }
-  uint bucket_id = bucket_ids[gid];
-  if (!bucket_total[bucket_id]) {
-    bucket_ids[gid] = 0xffffffff;
-  }
 }
 
 __kernel void p3(__global const uint *S_keys, __global uint *bucket_ids,
@@ -134,10 +128,6 @@ __kernel void p3(__global const uint *S_keys, __global uint *bucket_ids,
     return;
   }
   uint original_bucket_id = bucket_ids[gid];
-  if (original_bucket_id == 0xffffffff) {
-    return;
-  }
-
   uint key = S_keys[gid];
   uint bucket_id = original_bucket_id;
   bool found = false;
@@ -182,38 +172,46 @@ __kernel void p4(__global const uint *S_keys, __global const uint *S_rids,
                  __global const uint *bucket_key_rid_counts,
                  __global const uint *bucket_ids, __global uint *result_key,
                  __global uint *result_rid, __global uint *result_sid,
-                 __global uint *result_idx) {
+                 __global uint *result_counts) {
   uint gid = get_global_id(0);
   if (gid >= S_LENGTH) {
     return;
   }
-  uint bucket_id = bucket_ids[gid];
-  if (bucket_id == 0xffffffff) {
-    return;
-  }
+
+  // Early exit if no match
   if (match_found[gid] == 0) {
+    result_counts[gid] = 0;
     return;
   }
+
+  uint bucket_id = bucket_ids[gid];
   int key_idx = key_indices[gid];
-  if (key_idx < 0 || key_idx >= MAX_KEYS_PER_BUCKET) {
+
+  if (key_idx < 0) {
+    result_counts[gid] = 0;
     return;
   }
 
   uint bucket_key_offset = bucket_id * MAX_KEYS_PER_BUCKET + key_idx;
-  if (bucket_key_offset >= R_LENGTH * 2 * MAX_KEYS_PER_BUCKET) {
-    return;
-  }
-
   uint rid_count = bucket_key_rid_counts[bucket_key_offset];
 
   if (rid_count > MAX_RIDS_PER_KEY) {
     rid_count = MAX_RIDS_PER_KEY;
   }
 
+  // Each thread writes to its pre-allocated space: NO ATOMIC OPERATIONS
+  // gid * MAX_RIDS_PER_KEY is the base offset for this thread
+  uint base_offset = gid * MAX_RIDS_PER_KEY;
+  uint s_key = S_keys[gid];
+  uint s_rid = S_rids[gid];
+
   for (uint i = 0; i < rid_count; i++) {
-    uint id = atomic_inc(result_idx);
-    result_key[id] = S_keys[gid];
-    result_rid[id] = bucket_key_rids[bucket_key_offset * MAX_RIDS_PER_KEY + i];
-    result_sid[id] = S_rids[gid];
+    result_key[base_offset + i] = s_key;
+    result_rid[base_offset + i] =
+        bucket_key_rids[bucket_key_offset * MAX_RIDS_PER_KEY + i];
+    result_sid[base_offset + i] = s_rid;
   }
+
+  // Store the actual count for this thread
+  result_counts[gid] = rid_count;
 }

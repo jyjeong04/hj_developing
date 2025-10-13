@@ -248,22 +248,22 @@ int main(int argc, char *argv[]) {
         cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(int) * S_LENGTH);
         cl::Buffer S_match_found_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
 
-        // p4 - Allocate enough space for potential results
-        // Use S_LENGTH * 2 as a reasonable upper bound (observed ~S_LENGTH results)
-        size_t max_result_size = (size_t)S_LENGTH * 2;
+        // p4 - Pre-allocate large buffer: S_LENGTH * MAX_RIDS_PER_KEY
+        // Each S tuple gets MAX_RIDS_PER_KEY slots - NO ATOMIC OPERATIONS NEEDED
+        size_t max_result_size = (size_t)S_LENGTH * MAX_RIDS_PER_KEY;
         cl::Buffer result_key_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
         cl::Buffer result_rid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
         cl::Buffer result_sid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
-        cl::Buffer result_idx_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t));
+        cl::Buffer result_counts_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
 
         std::vector<uint32_t> bucket_totalNumcounts(BUCKET_HEADER_NUMBER, 0);
         std::vector<uint32_t> bucket_key_counts_init(BUCKET_HEADER_NUMBER, 0);
-        std::vector<uint32_t> result_idx_init(1, 0);
+        std::vector<uint32_t> result_counts_init(S_LENGTH, 0);
 
         // Initialize buffers to zero
         queue.enqueueWriteBuffer(bucket_total_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_totalNumcounts[0]);
         queue.enqueueWriteBuffer(bucket_key_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_key_counts_init[0]);
-        queue.enqueueWriteBuffer(result_idx_buf, CL_TRUE, 0, sizeof(uint32_t), &result_idx_init[0]);
+        queue.enqueueWriteBuffer(result_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * S_LENGTH, &result_counts_init[0]);
         
         // Zero-initialize large buffers
         std::vector<uint32_t> bucket_keys_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0xffffffffu);
@@ -340,12 +340,12 @@ int main(int argc, char *argv[]) {
         double p3_time = step_timer.getTimeMilliseconds();
         std::cout << "  p3 (key search): " << p3_time << " ms" << std::endl;
 
-        // p4: join matching records
+        // p4: join matching records (NO ATOMIC OPERATIONS!)
         step_timer.reset();
         p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
             S_keys_buf, S_rids_buf, S_key_indices_buf, S_match_found_buf,
             bucket_key_rids_buf, bucket_key_rid_counts_buf, S_bucket_ids_buf,
-            result_key_buf, result_rid_buf, result_sid_buf, result_idx_buf);
+            result_key_buf, result_rid_buf, result_sid_buf, result_counts_buf);
         queue.finish();
         double p4_time = step_timer.getTimeMilliseconds();
         std::cout << "  p4 (join output): " << p4_time << " ms" << std::endl;
@@ -356,28 +356,47 @@ int main(int argc, char *argv[]) {
         double opencl_time = opencl_timer.getTimeMilliseconds();
         std::cout << "\nOpenCL Join Total: " << opencl_time << " ms" << std::endl;
 
-        // Read back results
-        std::vector<uint32_t> result_count(1);
-        queue.enqueueReadBuffer(result_idx_buf, CL_TRUE, 0, sizeof(uint32_t), &result_count[0]);
+        // Read back result counts to determine actual result size
+        std::vector<uint32_t> result_counts(S_LENGTH);
+        queue.enqueueReadBuffer(result_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * S_LENGTH, &result_counts[0]);
         
-        uint32_t num_results = result_count[0];
-        
-        // Safety check: ensure we don't exceed allocated buffer size
-        if(num_results > max_result_size) {
-            std::cout << "WARNING: Result count (" << num_results << ") exceeds allocated buffer size (" << max_result_size << ")" << std::endl;
-            num_results = max_result_size;
+        // Calculate total number of results
+        uint32_t num_results = 0;
+        for(uint32_t i = 0; i < S_LENGTH; i++) {
+            num_results += result_counts[i];
         }
         
         std::cout << "OpenCL produced " << num_results << " joined tuples" << std::endl;
 
         if(num_results > 0) {
-            std::vector<uint32_t> result_keys(num_results);
-            std::vector<uint32_t> result_rids(num_results);
-            std::vector<uint32_t> result_sids(num_results);
+            // Read the sparse result buffers
+            std::vector<uint32_t> sparse_keys(max_result_size);
+            std::vector<uint32_t> sparse_rids(max_result_size);
+            std::vector<uint32_t> sparse_sids(max_result_size);
             
-            queue.enqueueReadBuffer(result_key_buf, CL_TRUE, 0, sizeof(uint32_t) * num_results, &result_keys[0]);
-            queue.enqueueReadBuffer(result_rid_buf, CL_TRUE, 0, sizeof(uint32_t) * num_results, &result_rids[0]);
-            queue.enqueueReadBuffer(result_sid_buf, CL_TRUE, 0, sizeof(uint32_t) * num_results, &result_sids[0]);
+            queue.enqueueReadBuffer(result_key_buf, CL_TRUE, 0, sizeof(uint32_t) * max_result_size, &sparse_keys[0]);
+            queue.enqueueReadBuffer(result_rid_buf, CL_TRUE, 0, sizeof(uint32_t) * max_result_size, &sparse_rids[0]);
+            queue.enqueueReadBuffer(result_sid_buf, CL_TRUE, 0, sizeof(uint32_t) * max_result_size, &sparse_sids[0]);
+            
+            // Compact results: remove empty slots
+            std::vector<uint32_t> result_keys;
+            std::vector<uint32_t> result_rids;
+            std::vector<uint32_t> result_sids;
+            result_keys.reserve(num_results);
+            result_rids.reserve(num_results);
+            result_sids.reserve(num_results);
+            
+            for(uint32_t i = 0; i < S_LENGTH; i++) {
+                uint32_t count = result_counts[i];
+                if(count > 0) {
+                    uint32_t base_offset = i * MAX_RIDS_PER_KEY;
+                    for(uint32_t j = 0; j < count; j++) {
+                        result_keys.push_back(sparse_keys[base_offset + j]);
+                        result_rids.push_back(sparse_rids[base_offset + j]);
+                        result_sids.push_back(sparse_sids[base_offset + j]);
+                    }
+                }
+            }
             
             // Convert to JoinedTuple format
             std::vector<JoinedTuple> opencl_res;
@@ -423,34 +442,6 @@ int main(int argc, char *argv[]) {
                   << ")"
                   << std::endl;
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
