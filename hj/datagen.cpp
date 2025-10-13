@@ -6,20 +6,26 @@
 #include <chrono>
 
 std::vector<Tuple> RGenerator(){
+	srand(time(NULL));
 	// RNG 준비: 고품질 시드 + 32비트 균등분포
-	static std::mt19937 rng(
-		static_cast<uint32_t>(
-			std::chrono::high_resolution_clock::now().time_since_epoch().count()
-		)
-	);
-	std::uniform_int_distribution<uint32_t> dist32(0u, 0xFFFFFFFFu);
+	// static std::mt19937 rng(
+	// 	static_cast<uint32_t>(
+	// 		std::chrono::high_resolution_clock::now().time_since_epoch().count()
+	// 	)
+	// );
+	// std::uniform_int_distribution<uint32_t> dist32(0u, 0xFFFFFFFFu);
+
+	// std::vector<Tuple> R(R_LENGTH);
+	// for(int i = 0; i < R_LENGTH; i++) {
+	// 	R[i].key = dist32(rng);
+	// 	R[i].rid = dist32(rng);
+	// }
 
 	std::vector<Tuple> R(R_LENGTH);
 	for(int i = 0; i < R_LENGTH; i++) {
-		R[i].key = dist32(rng);
-		R[i].rid = dist32(rng);
+		R[i].key = rand();
+		R[i].rid = rand();
 	}
-
 	return R;
 }
 

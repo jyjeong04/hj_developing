@@ -56,19 +56,19 @@ int main(int argc, char *argv[]) {
     srand(time(NULL));
     
     // Parse arguments: ./hj [device_index] [--skip-cpu] [--skip-std] [--help]
-    bool run_cpu_join = true;
-    bool run_std_join = true;
+    bool run_cpu_join = false;
+    bool run_std_join = false;
     
     for(int arg_i = 1; arg_i < argc; arg_i++) {
-        if(strcmp(argv[arg_i], "--skip-cpu") == 0) {
-            run_cpu_join = false;
-        } else if(strcmp(argv[arg_i], "--skip-std") == 0) {
-            run_std_join = false;
+        if(strcmp(argv[arg_i], "--cpu") == 0) {
+            run_cpu_join = true;
+        } else if(strcmp(argv[arg_i], "--std") == 0) {
+            run_std_join = true;
         } else if(strcmp(argv[arg_i], "--help") == 0 || strcmp(argv[arg_i], "-h") == 0) {
             std::cout << "Usage: " << argv[0] << " [device_index] [options]\n"
                       << "Options:\n"
-                      << "  --skip-cpu     Skip CPU hash join\n"
-                      << "  --skip-std     Skip standard hash join\n"
+                      << "  --cpu     Run CPU hash join\n"
+                      << "  --std     Run standard hash join\n"
                       << "  --help, -h     Show this help message\n"
                       << "\nExample:\n"
                       << "  " << argv[0] << " 0              # Run all joins on GPU device 0\n"
@@ -107,9 +107,9 @@ int main(int argc, char *argv[]) {
                     break;
                 }
             }
-            tmpHeader.totalNum++;
             if(!found) {
                 KeyHeader newKey;
+                tmpHeader.totalNum++;
                 newKey.key = tmpTuple.key;
                 tmpHeader.keyList.push_back(newKey);
             }
@@ -277,47 +277,84 @@ int main(int argc, char *argv[]) {
         // Build Phase
         std::cout << "\n=== OpenCL Build Phase ===" << std::endl;
         
+        util::Timer step_timer;
+        
         // b1: compute hash bucket number
+        step_timer.reset();
         b1(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf, R_bucket_ids_buf);
         queue.finish();
+        double b1_time = step_timer.getTimeMilliseconds();
+        std::cout << "  b1 (compute hash): " << b1_time << " ms" << std::endl;
         
         // b2: update bucket header
+        step_timer.reset();
         b2(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_bucket_ids_buf, bucket_total_buf);
+        queue.finish();
+        double b2_time = step_timer.getTimeMilliseconds();
+        std::cout << "  b2 (bucket count): " << b2_time << " ms" << std::endl;
         
         // b3: manage key lists
+        step_timer.reset();
         b3(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), 
             R_keys_buf, R_bucket_ids_buf, bucket_keys_buf, 
             bucket_key_counts_buf, key_indices_buf);
+        queue.finish();
+        double b3_time = step_timer.getTimeMilliseconds();
+        std::cout << "  b3 (key management): " << b3_time << " ms" << std::endl;
         
         // b4: insert record ids
+        step_timer.reset();
         b4(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), 
             R_rids_buf, R_bucket_ids_buf, key_indices_buf, 
             bucket_key_rids_buf, bucket_key_rid_counts_buf);
         queue.finish();
+        double b4_time = step_timer.getTimeMilliseconds();
+        std::cout << "  b4 (insert rids): " << b4_time << " ms" << std::endl;
+
+        double build_total = b1_time + b2_time + b3_time + b4_time;
+        std::cout << "Build Phase Total: " << build_total << " ms" << std::endl;
 
         // Probe Phase
-        std::cout << "=== OpenCL Probe Phase ===" << std::endl;
+        std::cout << "\n=== OpenCL Probe Phase ===" << std::endl;
         
         // p1: compute hash bucket number
+        step_timer.reset();
         p1(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf, S_bucket_ids_buf);
+        queue.finish();
+        double p1_time = step_timer.getTimeMilliseconds();
+        std::cout << "  p1 (compute hash): " << p1_time << " ms" << std::endl;
         
         // p2: check bucket validity
+        step_timer.reset();
         p2(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_bucket_ids_buf, bucket_total_buf);
+        queue.finish();
+        double p2_time = step_timer.getTimeMilliseconds();
+        std::cout << "  p2 (bucket check): " << p2_time << " ms" << std::endl;
         
         // p3: search key lists
+        step_timer.reset();
         p3(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
             S_keys_buf, S_bucket_ids_buf, bucket_keys_buf, 
             bucket_key_counts_buf, S_key_indices_buf, S_match_found_buf);
+        queue.finish();
+        double p3_time = step_timer.getTimeMilliseconds();
+        std::cout << "  p3 (key search): " << p3_time << " ms" << std::endl;
 
         // p4: join matching records
+        step_timer.reset();
         p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
             S_keys_buf, S_rids_buf, S_key_indices_buf, S_match_found_buf,
             bucket_key_rids_buf, bucket_key_rid_counts_buf, S_bucket_ids_buf,
             result_key_buf, result_rid_buf, result_sid_buf, result_idx_buf);
         queue.finish();
+        double p4_time = step_timer.getTimeMilliseconds();
+        std::cout << "  p4 (join output): " << p4_time << " ms" << std::endl;
+
+        double probe_total = p1_time + p2_time + p3_time + p4_time;
+        std::cout << "Probe Phase Total: " << probe_total << " ms" << std::endl;
 
         double opencl_time = opencl_timer.getTimeMilliseconds();
-        std::cout << "OpenCL Join Total: " << opencl_time << " ms" << std::endl;
+        std::cout << "\nOpenCL Join Total: " << opencl_time << " ms" << std::endl;
 
         // Read back results
         std::vector<uint32_t> result_count(1);
