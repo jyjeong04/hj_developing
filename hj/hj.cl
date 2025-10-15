@@ -171,8 +171,7 @@ __kernel void p4(__global const uint *S_keys, __global const uint *S_rids,
                  __global const uint *bucket_key_rids,
                  __global const uint *bucket_key_rid_counts,
                  __global const uint *bucket_ids, __global uint *result_key,
-                 __global uint *result_rid, __global uint *result_sid,
-                 __global uint *result_counts) {
+                 __global uint *result_rid, __global uint *result_sid) {
   uint gid = get_global_id(0);
   if (gid >= S_LENGTH) {
     return;
@@ -180,7 +179,6 @@ __kernel void p4(__global const uint *S_keys, __global const uint *S_rids,
 
   // Early exit if no match
   if (match_found[gid] == 0) {
-    result_counts[gid] = 0;
     return;
   }
 
@@ -188,7 +186,6 @@ __kernel void p4(__global const uint *S_keys, __global const uint *S_rids,
   int key_idx = key_indices[gid];
 
   if (key_idx < 0) {
-    result_counts[gid] = 0;
     return;
   }
 
@@ -211,7 +208,4 @@ __kernel void p4(__global const uint *S_keys, __global const uint *S_rids,
         bucket_key_rids[bucket_key_offset * MAX_RIDS_PER_KEY + i];
     result_sid[base_offset + i] = s_rid;
   }
-
-  // Store the actual count for this thread
-  result_counts[gid] = rid_count;
 }
