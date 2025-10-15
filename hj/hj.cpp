@@ -201,11 +201,11 @@ int main(int argc, char *argv[]) {
 
         cl::make_kernel<cl::Buffer, cl::Buffer> b1(program, "b1");
         cl::make_kernel<cl::Buffer, cl::Buffer> b2(program, "b2");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(program, "b3");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(program, "b4");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(program, "b3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(program, "b4");
         cl::make_kernel<cl::Buffer, cl::Buffer> p1(program, "p1");
         cl::make_kernel<cl::Buffer, cl::Buffer> p2(program, "p2");
-        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p3(program, "p3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p3(program, "p3");
         cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> p4(program, "p4");
 
         std::vector<uint32_t> R_keys(R_LENGTH), R_rids(R_LENGTH), S_keys(S_LENGTH), S_rids(S_LENGTH);
@@ -232,12 +232,10 @@ int main(int argc, char *argv[]) {
 
         // b3
         cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
-        cl::Buffer bucket_key_counts_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
         cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE, sizeof(uint32_t) * R_LENGTH);
 
         // b4
         cl::Buffer bucket_key_rids_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY);
-        cl::Buffer bucket_key_rid_counts_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
 
         // p1
         cl::Buffer S_bucket_ids_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
@@ -254,19 +252,20 @@ int main(int argc, char *argv[]) {
         cl::Buffer result_key_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
         cl::Buffer result_rid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
         cl::Buffer result_sid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * max_result_size);
+        cl::Buffer result_count_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, sizeof(uint32_t) * S_LENGTH);
 
         std::vector<uint32_t> bucket_totalNumcounts(BUCKET_HEADER_NUMBER, 0);
-        std::vector<uint32_t> bucket_key_counts_init(BUCKET_HEADER_NUMBER, 0);
 
         // Initialize buffers to zero
         queue.enqueueWriteBuffer(bucket_total_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_totalNumcounts[0]);
-        queue.enqueueWriteBuffer(bucket_key_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER, &bucket_key_counts_init[0]);
         
         // Zero-initialize large buffers
+        std::vector<uint32_t> bucket_key_rids_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY, 0xffffffffu);
         std::vector<uint32_t> bucket_keys_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0xffffffffu);
-        std::vector<uint32_t> bucket_key_rid_counts_init(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0);
+        std::vector<uint32_t> result_count_init(S_LENGTH, 0);
+        queue.enqueueWriteBuffer(bucket_key_rids_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY, &bucket_key_rids_init[0]);
         queue.enqueueWriteBuffer(bucket_keys_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_keys_init[0]);
-        queue.enqueueWriteBuffer(bucket_key_rid_counts_buf, CL_TRUE, 0, sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_key_rid_counts_init[0]);
+        queue.enqueueWriteBuffer(result_count_buf, CL_TRUE, 0, sizeof(uint32_t) * S_LENGTH, &result_count_init[0]);
 
         util::Timer opencl_timer;
         opencl_timer.reset();
@@ -293,8 +292,7 @@ int main(int argc, char *argv[]) {
         // b3: manage key lists
         step_timer.reset();
         b3(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), 
-            R_keys_buf, R_bucket_ids_buf, bucket_keys_buf, 
-            bucket_key_counts_buf, key_indices_buf);
+            R_keys_buf, R_bucket_ids_buf, bucket_keys_buf, key_indices_buf);
         queue.finish();
         double b3_time = step_timer.getTimeMilliseconds();
         std::cout << "  b3 (key management): " << b3_time << " ms" << std::endl;
@@ -303,7 +301,7 @@ int main(int argc, char *argv[]) {
         step_timer.reset();
         b4(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), 
             R_rids_buf, R_bucket_ids_buf, key_indices_buf, 
-            bucket_key_rids_buf, bucket_key_rid_counts_buf);
+            bucket_key_rids_buf);
         queue.finish();
         double b4_time = step_timer.getTimeMilliseconds();
         std::cout << "  b4 (insert rids): " << b4_time << " ms" << std::endl;
@@ -332,7 +330,7 @@ int main(int argc, char *argv[]) {
         step_timer.reset();
         p3(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
             S_keys_buf, S_bucket_ids_buf, bucket_keys_buf, 
-            bucket_key_counts_buf, S_key_indices_buf, S_match_found_buf);
+            S_key_indices_buf, S_match_found_buf);
         queue.finish();
         double p3_time = step_timer.getTimeMilliseconds();
         std::cout << "  p3 (key search): " << p3_time << " ms" << std::endl;
@@ -341,8 +339,8 @@ int main(int argc, char *argv[]) {
         step_timer.reset();
         p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), 
             S_keys_buf, S_rids_buf, S_key_indices_buf, S_match_found_buf,
-            bucket_key_rids_buf, bucket_key_rid_counts_buf, S_bucket_ids_buf,
-            result_key_buf, result_rid_buf, result_sid_buf);
+            bucket_key_rids_buf, S_bucket_ids_buf,
+            result_key_buf, result_rid_buf, result_sid_buf, result_count_buf);
         queue.finish();
         double p4_time = step_timer.getTimeMilliseconds();
         std::cout << "  p4 (join output): " << p4_time << " ms" << std::endl;
@@ -353,33 +351,14 @@ int main(int argc, char *argv[]) {
         double opencl_time = opencl_timer.getTimeMilliseconds();
         std::cout << "\nOpenCL Join Total: " << opencl_time << " ms" << std::endl;
 
-        // Read back metadata to calculate result counts on CPU
-        std::vector<uint32_t> s_match_found(S_LENGTH);
-        std::vector<int> s_key_indices(S_LENGTH);
-        std::vector<uint32_t> s_bucket_ids(S_LENGTH);
-        std::vector<uint32_t> bucket_key_rid_counts(BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
-        
-        queue.enqueueReadBuffer(S_match_found_buf, CL_TRUE, 0, sizeof(uint32_t) * S_LENGTH, &s_match_found[0]);
-        queue.enqueueReadBuffer(S_key_indices_buf, CL_TRUE, 0, sizeof(int) * S_LENGTH, &s_key_indices[0]);
-        queue.enqueueReadBuffer(S_bucket_ids_buf, CL_TRUE, 0, sizeof(uint32_t) * S_LENGTH, &s_bucket_ids[0]);
-        queue.enqueueReadBuffer(bucket_key_rid_counts_buf, CL_TRUE, 0, 
-            sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, &bucket_key_rid_counts[0]);
-        
-        // Calculate result counts on CPU
+        // Read back result counts directly from GPU
         std::vector<uint32_t> result_counts(S_LENGTH);
+        queue.enqueueReadBuffer(result_count_buf, CL_TRUE, 0, sizeof(uint32_t) * S_LENGTH, &result_counts[0]);
+        
+        // Calculate total number of results
         uint32_t num_results = 0;
         for(uint32_t i = 0; i < S_LENGTH; i++) {
-            if(s_match_found[i] && s_key_indices[i] >= 0) {
-                uint32_t bucket_id = s_bucket_ids[i];
-                int key_idx = s_key_indices[i];
-                uint32_t bucket_key_offset = bucket_id * MAX_KEYS_PER_BUCKET + key_idx;
-                uint32_t rid_count = bucket_key_rid_counts[bucket_key_offset];
-                if(rid_count > MAX_RIDS_PER_KEY) rid_count = MAX_RIDS_PER_KEY;
-                result_counts[i] = rid_count;
-                num_results += rid_count;
-            } else {
-                result_counts[i] = 0;
-            }
+            num_results += result_counts[i];
         }
         
         std::cout << "OpenCL produced " << num_results << " joined tuples" << std::endl;
