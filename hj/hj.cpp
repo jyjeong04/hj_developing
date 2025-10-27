@@ -470,14 +470,5 @@ int main(int argc, char *argv[]) {
     }
     
     return 0;
-
-//     // Print a few sample results (up to 20)
-//     std::cout << "RESULT (first up to 20 tuples)\n";
-//     int printN = static_cast<int>(std::min<size_t>(20, res.size()));
-//     for(int k = 0; k < printN; k++) {
-//         std::cout << "(key=" << res[k].key
-//                   << ", ridR=" << res[k].ridR
-//                   << ", ridS=" << res[k].ridS << ")\n";
-//     }
 }
 
