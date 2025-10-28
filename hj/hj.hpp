@@ -1,5 +1,8 @@
 #pragma once
 
+#define CL_TARGET_OPENCL_VERSION 120
+#define __CL_ENABLE_EXCEPTIONS
+
 #include <CL/cl_platform.h>
 #include <cstdint>
 #include <iostream>
@@ -41,7 +44,3 @@ inline std::ostream &operator<<(std::ostream &out, const JoinedTuple &tuple) {
       << "}";
   return out;
 }
-
-// Simple Hash Join using OpenCL
-std::vector<JoinedTuple> shj(const std::vector<Tuple> &R,
-                             const std::vector<Tuple> &S, cl_uint deviceIndex);

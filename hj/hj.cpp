@@ -52,294 +52,6 @@ uint32_t hash(uint32_t key) {
   return (key * 2654435769U) % (BUCKET_HEADER_NUMBER);
 }
 
-// Simple Hash Join using OpenCL
-std::vector<JoinedTuple> shj(const std::vector<Tuple> &R,
-                             const std::vector<Tuple> &S, cl_uint deviceIndex) {
-  std::vector<cl::Device> devices;
-  unsigned numDevices = getDeviceList(devices);
-
-  if (deviceIndex >= numDevices) {
-    std::cout << "Invalid device index";
-    return std::vector<JoinedTuple>();
-  }
-
-  cl::Device device = devices[deviceIndex];
-
-  std::string name;
-  getDeviceName(device, name);
-  std::cout << "\nUsing OpenCL Device: " << name << "\n";
-
-  std::vector<cl::Device> chosen_device;
-  chosen_device.push_back(device);
-  cl::Context context(chosen_device);
-  cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE);
-
-  // Create programs and kernels
-  cl::Program program(context, util::loadProgram("hj.cl"), true);
-
-  cl::make_kernel<cl::Buffer, cl::Buffer> b1(program, "b1");
-  cl::make_kernel<cl::Buffer, cl::Buffer> b2(program, "b2");
-  cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(program,
-                                                                     "b3");
-  cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(program,
-                                                                     "b4");
-  cl::make_kernel<cl::Buffer, cl::Buffer> p1(program, "p1");
-  cl::make_kernel<cl::Buffer, cl::Buffer> p2(program, "p2");
-  cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer>
-      p3(program, "p3");
-  cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer,
-                  cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer>
-      p4(program, "p4");
-
-  std::vector<uint32_t> R_keys(R_LENGTH), R_rids(R_LENGTH), S_keys(S_LENGTH),
-      S_rids(S_LENGTH);
-  for (int i = 0; i < R_LENGTH; i++) {
-    R_keys[i] = R[i].key;
-    R_rids[i] = R[i].rid;
-  }
-  for (int i = 0; i < S_LENGTH; i++) {
-    S_keys[i] = S[i].key;
-    S_rids[i] = S[i].rid;
-  }
-
-  // buffer init
-  cl::Buffer R_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                        sizeof(uint32_t) * R_LENGTH, &R_keys[0]);
-  cl::Buffer S_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                        sizeof(uint32_t) * S_LENGTH, &S_keys[0]);
-  cl::Buffer R_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                        sizeof(uint32_t) * R_LENGTH, &R_rids[0]);
-  cl::Buffer S_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                        sizeof(uint32_t) * S_LENGTH, &S_rids[0]);
-
-  // b1
-  cl::Buffer R_bucket_ids_buf(context,
-                              CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                              sizeof(uint32_t) * R_LENGTH);
-
-  // b2
-  cl::Buffer bucket_total_buf(context,
-                              CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                              sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
-
-  // b3
-  cl::Buffer bucket_keys_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                             sizeof(uint32_t) * BUCKET_HEADER_NUMBER *
-                                 MAX_KEYS_PER_BUCKET);
-  cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE,
-                             sizeof(uint32_t) * R_LENGTH);
-
-  // b4
-  cl::Buffer bucket_key_rids_buf(context,
-                                 CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                                 sizeof(uint32_t) * BUCKET_HEADER_NUMBER *
-                                     MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY);
-
-  // p1
-  cl::Buffer S_bucket_ids_buf(context,
-                              CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                              sizeof(uint32_t) * S_LENGTH);
-
-  // p2
-
-  // p3
-  cl::Buffer S_key_indices_buf(context,
-                               CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                               sizeof(int) * S_LENGTH);
-  cl::Buffer S_match_found_buf(context,
-                               CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                               sizeof(uint32_t) * S_LENGTH);
-
-  // p4 - Pre-allocate large buffer: S_LENGTH * MAX_RIDS_PER_KEY
-  // Each S tuple gets MAX_RIDS_PER_KEY slots - NO ATOMIC OPERATIONS NEEDED
-  size_t max_result_size = (size_t)S_LENGTH * MAX_RIDS_PER_KEY;
-  cl::Buffer result_key_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                            sizeof(uint32_t) * max_result_size);
-  cl::Buffer result_rid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                            sizeof(uint32_t) * max_result_size);
-  cl::Buffer result_sid_buf(context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                            sizeof(uint32_t) * max_result_size);
-  cl::Buffer result_count_buf(context,
-                              CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                              sizeof(uint32_t) * S_LENGTH);
-
-  std::vector<uint32_t> bucket_totalNumcounts(BUCKET_HEADER_NUMBER, 0);
-
-  // Initialize buffers to zero
-  queue.enqueueWriteBuffer(bucket_total_buf, CL_TRUE, 0,
-                           sizeof(uint32_t) * BUCKET_HEADER_NUMBER,
-                           &bucket_totalNumcounts[0]);
-
-  // Zero-initialize large buffers
-  std::vector<uint32_t> bucket_key_rids_init(
-      BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY,
-      0xffffffffu);
-  std::vector<uint32_t> bucket_keys_init(
-      BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0xffffffffu);
-  std::vector<uint32_t> result_count_init(S_LENGTH, 0);
-  queue.enqueueWriteBuffer(bucket_key_rids_buf, CL_TRUE, 0,
-                           sizeof(uint32_t) * BUCKET_HEADER_NUMBER *
-                               MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY,
-                           &bucket_key_rids_init[0]);
-  queue.enqueueWriteBuffer(bucket_keys_buf, CL_TRUE, 0,
-                           sizeof(uint32_t) * BUCKET_HEADER_NUMBER *
-                               MAX_KEYS_PER_BUCKET,
-                           &bucket_keys_init[0]);
-  queue.enqueueWriteBuffer(result_count_buf, CL_TRUE, 0,
-                           sizeof(uint32_t) * S_LENGTH, &result_count_init[0]);
-
-  util::Timer opencl_timer;
-  opencl_timer.reset();
-
-  // Build Phase
-  std::cout << "\n=== OpenCL Build Phase ===" << std::endl;
-
-  util::Timer step_timer;
-
-  // b1: compute hash bucket number
-  step_timer.reset();
-  b1(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf,
-     R_bucket_ids_buf);
-  queue.finish();
-  double b1_time = step_timer.getTimeMilliseconds();
-  std::cout << "  b1 (compute hash): " << b1_time << " ms" << std::endl;
-
-  // b2: update bucket header
-  step_timer.reset();
-  b2(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_bucket_ids_buf,
-     bucket_total_buf);
-  queue.finish();
-  double b2_time = step_timer.getTimeMilliseconds();
-  std::cout << "  b2 (bucket count): " << b2_time << " ms" << std::endl;
-
-  // b3: manage key lists
-  step_timer.reset();
-  b3(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf,
-     R_bucket_ids_buf, bucket_keys_buf, key_indices_buf);
-  queue.finish();
-  double b3_time = step_timer.getTimeMilliseconds();
-  std::cout << "  b3 (key management): " << b3_time << " ms" << std::endl;
-
-  // b4: insert record ids
-  step_timer.reset();
-  b4(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_rids_buf,
-     R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
-  queue.finish();
-  double b4_time = step_timer.getTimeMilliseconds();
-  std::cout << "  b4 (insert rids): " << b4_time << " ms" << std::endl;
-
-  double build_total = b1_time + b2_time + b3_time + b4_time;
-  std::cout << "Build Phase Total: " << build_total << " ms" << std::endl;
-
-  // Probe Phase
-  std::cout << "\n=== OpenCL Probe Phase ===" << std::endl;
-
-  // p1: compute hash bucket number
-  step_timer.reset();
-  p1(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
-     S_bucket_ids_buf);
-  queue.finish();
-  double p1_time = step_timer.getTimeMilliseconds();
-  std::cout << "  p1 (compute hash): " << p1_time << " ms" << std::endl;
-
-  // p2: check bucket validity
-  step_timer.reset();
-  p2(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_bucket_ids_buf,
-     bucket_total_buf);
-  queue.finish();
-  double p2_time = step_timer.getTimeMilliseconds();
-  std::cout << "  p2 (bucket check): " << p2_time << " ms" << std::endl;
-
-  // p3: search key lists
-  step_timer.reset();
-  p3(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
-     S_bucket_ids_buf, bucket_keys_buf, S_key_indices_buf, S_match_found_buf);
-  queue.finish();
-  double p3_time = step_timer.getTimeMilliseconds();
-  std::cout << "  p3 (key search): " << p3_time << " ms" << std::endl;
-
-  // p4: join matching records (NO ATOMIC OPERATIONS!)
-  step_timer.reset();
-  p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf, S_rids_buf,
-     S_key_indices_buf, S_match_found_buf, bucket_key_rids_buf,
-     S_bucket_ids_buf, result_key_buf, result_rid_buf, result_sid_buf,
-     result_count_buf);
-  queue.finish();
-  double p4_time = step_timer.getTimeMilliseconds();
-  std::cout << "  p4 (join output): " << p4_time << " ms" << std::endl;
-
-  double probe_total = p1_time + p2_time + p3_time + p4_time;
-  std::cout << "Probe Phase Total: " << probe_total << " ms" << std::endl;
-
-  double opencl_time = opencl_timer.getTimeMilliseconds();
-  std::cout << "\nOpenCL Join Total: " << opencl_time << " ms" << std::endl;
-
-  // Read back result counts directly from GPU
-  std::vector<uint32_t> result_counts(S_LENGTH);
-  queue.enqueueReadBuffer(result_count_buf, CL_TRUE, 0,
-                          sizeof(uint32_t) * S_LENGTH, &result_counts[0]);
-
-  // Calculate total number of results
-  uint32_t num_results = 0;
-  for (uint32_t i = 0; i < S_LENGTH; i++) {
-    num_results += result_counts[i];
-  }
-
-  std::cout << "OpenCL produced " << num_results << " joined tuples"
-            << std::endl;
-
-  std::vector<JoinedTuple> opencl_res;
-
-  if (num_results > 0) {
-    // Read the sparse result buffers
-    std::vector<uint32_t> sparse_keys(max_result_size);
-    std::vector<uint32_t> sparse_rids(max_result_size);
-    std::vector<uint32_t> sparse_sids(max_result_size);
-
-    queue.enqueueReadBuffer(result_key_buf, CL_TRUE, 0,
-                            sizeof(uint32_t) * max_result_size,
-                            &sparse_keys[0]);
-    queue.enqueueReadBuffer(result_rid_buf, CL_TRUE, 0,
-                            sizeof(uint32_t) * max_result_size,
-                            &sparse_rids[0]);
-    queue.enqueueReadBuffer(result_sid_buf, CL_TRUE, 0,
-                            sizeof(uint32_t) * max_result_size,
-                            &sparse_sids[0]);
-
-    // Compact results: remove empty slots
-    std::vector<uint32_t> result_keys;
-    std::vector<uint32_t> result_rids;
-    std::vector<uint32_t> result_sids;
-    result_keys.reserve(num_results);
-    result_rids.reserve(num_results);
-    result_sids.reserve(num_results);
-
-    for (uint32_t i = 0; i < S_LENGTH; i++) {
-      uint32_t count = result_counts[i];
-      if (count > 0) {
-        uint32_t base_offset = i * MAX_RIDS_PER_KEY;
-        for (uint32_t j = 0; j < count; j++) {
-          result_keys.push_back(sparse_keys[base_offset + j]);
-          result_rids.push_back(sparse_rids[base_offset + j]);
-          result_sids.push_back(sparse_sids[base_offset + j]);
-        }
-      }
-    }
-
-    // Convert to JoinedTuple format
-    opencl_res.reserve(num_results);
-    for (uint32_t i = 0; i < num_results; i++) {
-      JoinedTuple jt;
-      jt.key = result_keys[i];
-      jt.ridR = result_rids[i];
-      jt.ridS = result_sids[i];
-      opencl_res.push_back(jt);
-    }
-  }
-
-  return opencl_res;
-}
-
 int main(int argc, char *argv[]) {
   srand(time(NULL));
 
@@ -611,91 +323,58 @@ int main(int argc, char *argv[]) {
                              sizeof(uint32_t) * S_LENGTH,
                              &result_count_init[0]);
 
-    util::Timer opencl_timer;
-    opencl_timer.reset();
-
     // Build Phase
     std::cout << "\n=== OpenCL Build Phase ===" << std::endl;
 
-    util::Timer step_timer;
+    util::Timer opencl_timer;
+    opencl_timer.reset();
 
     // b1: compute hash bucket number
-    step_timer.reset();
     b1(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf,
        R_bucket_ids_buf);
-    queue.finish();
-    double b1_time = step_timer.getTimeMilliseconds();
-    std::cout << "  b1 (compute hash): " << b1_time << " ms" << std::endl;
 
     // b2: update bucket header
-    step_timer.reset();
     b2(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_bucket_ids_buf,
        bucket_total_buf);
-    queue.finish();
-    double b2_time = step_timer.getTimeMilliseconds();
-    std::cout << "  b2 (bucket count): " << b2_time << " ms" << std::endl;
 
     // b3: manage key lists
-    step_timer.reset();
     b3(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf,
        R_bucket_ids_buf, bucket_keys_buf, key_indices_buf);
-    queue.finish();
-    double b3_time = step_timer.getTimeMilliseconds();
-    std::cout << "  b3 (key management): " << b3_time << " ms" << std::endl;
 
     // b4: insert record ids
-    step_timer.reset();
     b4(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_rids_buf,
        R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
     queue.finish();
-    double b4_time = step_timer.getTimeMilliseconds();
-    std::cout << "  b4 (insert rids): " << b4_time << " ms" << std::endl;
-
-    double build_total = b1_time + b2_time + b3_time + b4_time;
-    std::cout << "Build Phase Total: " << build_total << " ms" << std::endl;
+    double build_time = opencl_timer.getTimeMilliseconds();
+    std::cout << "Build Phase Total: " << build_time << " ms" << std::endl;
 
     // Probe Phase
     std::cout << "\n=== OpenCL Probe Phase ===" << std::endl;
 
     // p1: compute hash bucket number
-    step_timer.reset();
+    opencl_timer.reset();
     p1(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
        S_bucket_ids_buf);
-    queue.finish();
-    double p1_time = step_timer.getTimeMilliseconds();
-    std::cout << "  p1 (compute hash): " << p1_time << " ms" << std::endl;
 
     // p2: check bucket validity
-    step_timer.reset();
     p2(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_bucket_ids_buf,
        bucket_total_buf);
-    queue.finish();
-    double p2_time = step_timer.getTimeMilliseconds();
-    std::cout << "  p2 (bucket check): " << p2_time << " ms" << std::endl;
 
     // p3: search key lists
-    step_timer.reset();
     p3(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
        S_bucket_ids_buf, bucket_keys_buf, S_key_indices_buf, S_match_found_buf);
-    queue.finish();
-    double p3_time = step_timer.getTimeMilliseconds();
-    std::cout << "  p3 (key search): " << p3_time << " ms" << std::endl;
 
     // p4: join matching records (NO ATOMIC OPERATIONS!)
-    step_timer.reset();
     p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf, S_rids_buf,
        S_key_indices_buf, S_match_found_buf, bucket_key_rids_buf,
        S_bucket_ids_buf, result_key_buf, result_rid_buf, result_sid_buf,
        result_count_buf);
     queue.finish();
-    double p4_time = step_timer.getTimeMilliseconds();
-    std::cout << "  p4 (join output): " << p4_time << " ms" << std::endl;
+    double probe_time = opencl_timer.getTimeMilliseconds();
+    std::cout << "  p4 (join output): " << probe_time << " ms" << std::endl;
 
-    double probe_total = p1_time + p2_time + p3_time + p4_time;
-    std::cout << "Probe Phase Total: " << probe_total << " ms" << std::endl;
-
-    double opencl_time = opencl_timer.getTimeMilliseconds();
-    std::cout << "\nOpenCL Join Total: " << opencl_time << " ms" << std::endl;
+    std::cout << "\nOpenCL Join Total: " << build_time + probe_time << " ms"
+              << std::endl;
 
     // Read back result counts directly from GPU
     std::vector<uint32_t> result_counts(S_LENGTH);

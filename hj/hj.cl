@@ -29,7 +29,7 @@ __kernel void b3(__global const uint *R_keys, __global uint *bucket_ids,
   uint bucket_id = original_bucket_id;
   int key_idx = -1;
 
-  // Linear probing: search current bucket, if full move to next bucket
+  // Linear probing: search current bucket, if full move to next bu
   for (uint probe = 0; probe < BUCKET_HEADER_NUMBER; probe++) {
     uint bucket_offset = bucket_id * MAX_KEYS_PER_BUCKET;
 
