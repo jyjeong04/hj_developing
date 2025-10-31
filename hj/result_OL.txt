@@ -1,0 +1,40 @@
+10/31
+
+make && ./hj 3 --bench
+g++ hj.cpp -I Cpp_common -O2 -ffast-math -lm -lOpenCL -fopenmp -o hj
+
+=== OL Optimization Mode ===
+Using OpenCL CPU: cpu-skylake-Intel(R) Core(TM) i7-9700 CPU @ 3.00GHz
+Using OpenCL GPU: Intel(R) UHD Graphics 630
+Step assignment: b1,b2,b3->CPU, b4->GPU, p1,p2,p3->CPU, p4->GPU
+
+
+=== OL Step Combination Benchmark ===
+Testing all combinations of b3, b4, p3, p4
+Format: [b3][b4][p3][p4] where 0=CPU, 1=GPU
+Running 10 iterations per combination...
+
+[0000]: Average = 632.8 ms
+[1000]: Average = 779 ms
+[0100]: Average = 743.6 ms
+[1100]: Average = 867.5 ms
+[0010]: Average = 721.7 ms
+[1010]: Average = 859.1 ms
+[0110]: Average = 839.1 ms
+[1110]: Average = 959.1 ms
+[0001]: Average = 679.2 ms
+[1001]: Average = 817 ms
+[0101]: Average = 780.4 ms
+[1101]: Average = 904.7 ms
+[0011]: Average = 757 ms
+[1011]: Average = 897 ms
+[0111]: Average = 877.2 ms
+[1111]: Average = 997.4 ms
+
+=== Benchmark Results ===
+Best Combination: [0000]
+  b3: CPU
+  b4: CPU
+  p3: CPU
+  p4: CPU
+Best Average Time: 632.8 ms

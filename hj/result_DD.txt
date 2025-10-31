@@ -1,0 +1,44 @@
+make && ./hj 2 --bench
+g++ hj.cpp -I Cpp_common -O2 -ffast-math -lm -lOpenCL -fopenmp -o hj
+
+Using OpenCL CPU: cpu-skylake-Intel(R) Core(TM) i7-9700 CPU @ 3.00GHz
+
+Using OpenCL GPU: Intel(R) UHD Graphics 630
+
+=== OpenCL Build Phase ===
+Build Phase Total: 382 ms
+
+=== OpenCL Probe Phase Benchmark ===
+Testing WORK_RATIO_GPU from 0 to 50 in steps of 2
+Running 10 iterations per ratio...
+
+Ratio 0%: Skipped (invalid portion sizes)
+Ratio 2%: Average = 260.7 ms (GPU: 331776, CPU: 16445440)
+Ratio 4%: Average = 264.4 ms (GPU: 667648, CPU: 16109568)
+Ratio 6%: Average = 263.4 ms (GPU: 1003520, CPU: 15773696)
+Ratio 8%: Average = 267.3 ms (GPU: 1339392, CPU: 15437824)
+Ratio 10%: Average = 265.1 ms (GPU: 1675264, CPU: 15101952)
+Ratio 12%: Average = 265.7 ms (GPU: 2011136, CPU: 14766080)
+Ratio 14%: Average = 279.8 ms (GPU: 2347008, CPU: 14430208)
+Ratio 16%: Average = 282.5 ms (GPU: 2682880, CPU: 14094336)
+Ratio 18%: Average = 284.5 ms (GPU: 3018752, CPU: 13758464)
+Ratio 20%: Average = 287.3 ms (GPU: 3354624, CPU: 13422592)
+Ratio 22%: Average = 292 ms (GPU: 3690496, CPU: 13086720)
+Ratio 24%: Average = 295.1 ms (GPU: 4026368, CPU: 12750848)
+Ratio 26%: Average = 298.2 ms (GPU: 4358144, CPU: 12419072)
+Ratio 28%: Average = 302.5 ms (GPU: 4694016, CPU: 12083200)
+Ratio 30%: Average = 306.3 ms (GPU: 5029888, CPU: 11747328)
+Ratio 32%: Average = 311.9 ms (GPU: 5365760, CPU: 11411456)
+Ratio 34%: Average = 314.5 ms (GPU: 5701632, CPU: 11075584)
+Ratio 36%: Average = 318.6 ms (GPU: 6037504, CPU: 10739712)
+Ratio 38%: Average = 321.9 ms (GPU: 6373376, CPU: 10403840)
+Ratio 40%: Average = 325.8 ms (GPU: 6709248, CPU: 10067968)
+Ratio 42%: Average = 327.1 ms (GPU: 7045120, CPU: 9732096)
+Ratio 44%: Average = 330.1 ms (GPU: 7380992, CPU: 9396224)
+Ratio 46%: Average = 333.7 ms (GPU: 7716864, CPU: 9060352)
+Ratio 48%: Average = 337.9 ms (GPU: 8052736, CPU: 8724480)
+Ratio 50%: Average = 339.8 ms (GPU: 8388608, CPU: 8388608)
+
+=== Benchmark Results ===
+Best WORK_RATIO_GPU: 2%
+Best Average Time: 260.7 ms
