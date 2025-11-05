@@ -7,4 +7,4 @@
 #define MAX_RIDS_PER_KEY 2
 #define HASH_SEED 2654435769U
 
-#define WORK_RATIO_GPU 30
+#define WORK_RATIO_GPU 2

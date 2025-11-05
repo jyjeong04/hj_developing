@@ -1,0 +1,132 @@
+./hj 4 --bench
+
+=== PL Optimization ===
+Build: CPU-only
+Build time: 373 ms
+
+GPU ratio: 0
+
+GPU ratio: 2
+p1 time: 6.2
+p3 time: 75
+p4 time: 171
+
+GPU ratio: 4
+p1 time: 6.3
+p3 time: 75.9
+p4 time: 171.4
+
+GPU ratio: 6
+p1 time: 7
+p3 time: 78.5
+p4 time: 173.9
+
+GPU ratio: 8
+p1 time: 7
+p3 time: 78.2
+p4 time: 173
+
+GPU ratio: 10
+p1 time: 7
+p3 time: 78.4
+p4 time: 174.5
+
+GPU ratio: 12
+p1 time: 7.1
+p3 time: 79.8
+p4 time: 175
+
+GPU ratio: 14
+p1 time: 7.2
+p3 time: 80.5
+p4 time: 175.4
+
+GPU ratio: 16
+p1 time: 7.2
+p3 time: 80.9
+p4 time: 176.8
+
+GPU ratio: 18
+p1 time: 7.7
+p3 time: 82.4
+p4 time: 177.5
+
+GPU ratio: 20
+p1 time: 8
+p3 time: 82.3
+p4 time: 177.2
+
+GPU ratio: 22
+p1 time: 8
+p3 time: 82.6
+p4 time: 176.7
+
+GPU ratio: 24
+p1 time: 8.1
+p3 time: 86.5
+p4 time: 179.4
+
+GPU ratio: 26
+p1 time: 8.2
+p3 time: 87.6
+p4 time: 179
+
+GPU ratio: 28
+p1 time: 8
+p3 time: 89.3
+p4 time: 178.9
+
+GPU ratio: 30
+p1 time: 8.1
+p3 time: 91.4
+p4 time: 179.5
+
+GPU ratio: 32
+p1 time: 8.2
+p3 time: 93
+p4 time: 180.3
+
+GPU ratio: 34
+p1 time: 8.3
+p3 time: 95.3
+p4 time: 181.7
+
+GPU ratio: 36
+p1 time: 9.1
+p3 time: 97.5
+p4 time: 183.1
+
+GPU ratio: 38
+p1 time: 9
+p3 time: 99.3
+p4 time: 183.4
+
+GPU ratio: 40
+p1 time: 9
+p3 time: 101.1
+p4 time: 184.7
+
+GPU ratio: 42
+p1 time: 9
+p3 time: 103.5
+p4 time: 185.4
+
+GPU ratio: 44
+p1 time: 9
+p3 time: 105.1
+p4 time: 186.8
+
+GPU ratio: 46
+p1 time: 9
+p3 time: 107.2
+p4 time: 188.7
+
+GPU ratio: 48
+p1 time: 9
+p3 time: 109.2
+p4 time: 189.2
+
+GPU ratio: 50
+p1 time: 9
+p3 time: 111.2
+p4 time: 190.4

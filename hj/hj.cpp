@@ -332,26 +332,38 @@ int main(int argc, char *argv[]) {
         // Build Phase
         std::cout << "\n=== OpenCL Build Phase ===" << std::endl;
 
-        util::Timer opencl_timer;
+        util::Timer opencl_timer, step_timer;
         opencl_timer.reset();
-
+        step_timer.reset();
         // b1: compute hash bucket number
         b1(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf,
            R_bucket_ids_buf);
+        queue.finish();
+        double b1_time = step_timer.getTimeMilliseconds();
 
         // b2: update bucket header
+        step_timer.reset();
         b2(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_bucket_ids_buf,
            bucket_total_buf);
+        queue.finish();
+        double b2_time = step_timer.getTimeMilliseconds();
 
         // b3: manage key lists
+        step_timer.reset();
         b3(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_keys_buf,
            R_bucket_ids_buf, bucket_keys_buf, key_indices_buf);
-
+        queue.finish();
+        double b3_time = step_timer.getTimeMilliseconds();
         // b4: insert record ids
+        step_timer.reset();
         b4(cl::EnqueueArgs(queue, cl::NDRange(R_LENGTH)), R_rids_buf,
            R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
         queue.finish();
+        double b4_time = step_timer.getTimeMilliseconds();
         double build_time = opencl_timer.getTimeMilliseconds();
+        std::cout << "b1 time: " << b1_time << "\nb2 time: " << b2_time
+                  << "\nb3 time: " << b3_time << "\nb4 time: " << b4_time
+                  << std::endl;
         std::cout << "Build Phase Total: " << build_time << " ms" << std::endl;
 
         // Probe Phase
@@ -359,27 +371,38 @@ int main(int argc, char *argv[]) {
 
         // p1: compute hash bucket number
         opencl_timer.reset();
+        step_timer.reset();
         p1(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
            S_bucket_ids_buf);
+        queue.finish();
+        double p1_time = step_timer.getTimeMilliseconds();
 
         // p2: check bucket validity
+        step_timer.reset();
         p2(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_bucket_ids_buf,
            bucket_total_buf);
-
+        queue.finish();
+        double p2_time = step_timer.getTimeMilliseconds();
         // p3: search key lists
+        step_timer.reset();
         p3(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
            S_bucket_ids_buf, bucket_keys_buf, S_key_indices_buf,
            S_match_found_buf);
-
+        queue.finish();
+        double p3_time = step_timer.getTimeMilliseconds();
         // p4: join matching records (NO ATOMIC OPERATIONS!)
+        step_timer.reset();
         p4(cl::EnqueueArgs(queue, cl::NDRange(S_LENGTH)), S_keys_buf,
            S_rids_buf, S_key_indices_buf, S_match_found_buf,
            bucket_key_rids_buf, S_bucket_ids_buf, result_key_buf,
            result_rid_buf, result_sid_buf, result_count_buf);
         queue.finish();
+        double p4_time = step_timer.getTimeMilliseconds();
         double probe_time = opencl_timer.getTimeMilliseconds();
-        std::cout << "\nProbe Phase Total: " << probe_time << " ms"
+        std::cout << "p1 time: " << p1_time << "\np2 time: " << p2_time
+                  << "\np3 time: " << p3_time << "\np4 time: " << p4_time
                   << std::endl;
+        std::cout << "Probe Phase Total: " << probe_time << " ms" << std::endl;
 
         std::cout << "\nOpenCL Join Total: " << build_time + probe_time << " ms"
                   << std::endl;
@@ -691,8 +714,8 @@ int main(int argc, char *argv[]) {
 
         // Probe Phase
         if (run_bench) {
-          std::cout << "\n=== OpenCL Probe Phase Benchmark ===" << std::endl;
-          std::cout << "Testing WORK_RATIO_GPU from 20 to 50 in steps of 2\n";
+          std::cout << "\n=== OpenCL Probe Phase DD Benchmark ===" << std::endl;
+          std::cout << "Testing WORK_RATIO_GPU from 0 to 50 in steps of 2\n";
           std::cout << "Running 10 iterations per ratio...\n" << std::endl;
 
           double best_avg_time = 1e9;
@@ -807,20 +830,6 @@ int main(int argc, char *argv[]) {
               cl::Event probe_events[2];
 
               // GPU probe phase - GPU hash table only
-              p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
-                 S_keys_gpu_buf, S_bucket_ids_gpu_buf);
-              p2(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
-                 S_bucket_ids_gpu_buf, bucket_total_gpu_buf);
-              p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
-                 S_keys_gpu_buf, S_bucket_ids_gpu_buf, bucket_keys_cpu_buf,
-                 S_key_indices_gpu_buf, S_match_found_gpu_buf);
-              probe_events[0] = p4(
-                  cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
-                  S_keys_gpu_buf, S_rids_gpu_buf, S_key_indices_gpu_buf,
-                  S_match_found_gpu_buf, bucket_key_rids_cpu_buf,
-                  S_bucket_ids_gpu_buf, result_key_gpu_buf, result_rid_gpu_buf,
-                  result_sid_gpu_buf, result_count_gpu_buf);
-              gpu_queue.flush();
 
               // CPU probe phase - CPU hash table only
               p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
@@ -837,6 +846,20 @@ int main(int argc, char *argv[]) {
                   S_bucket_ids_cpu_buf, result_key_cpu_buf, result_rid_cpu_buf,
                   result_sid_cpu_buf, result_count_cpu_buf);
               cpu_queue.flush();
+              p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                 S_keys_gpu_buf, S_bucket_ids_gpu_buf);
+              p2(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                 S_bucket_ids_gpu_buf, bucket_total_gpu_buf);
+              p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                 S_keys_gpu_buf, S_bucket_ids_gpu_buf, bucket_keys_cpu_buf,
+                 S_key_indices_gpu_buf, S_match_found_gpu_buf);
+              probe_events[0] = p4(
+                  cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                  S_keys_gpu_buf, S_rids_gpu_buf, S_key_indices_gpu_buf,
+                  S_match_found_gpu_buf, bucket_key_rids_cpu_buf,
+                  S_bucket_ids_gpu_buf, result_key_gpu_buf, result_rid_gpu_buf,
+                  result_sid_gpu_buf, result_count_gpu_buf);
+              gpu_queue.flush();
 
               // 두 device의 probe phase 완료 대기
               cl_event event_handles[2] = {probe_events[0](),
@@ -958,19 +981,27 @@ int main(int argc, char *argv[]) {
           cl::Event probe_events[2];
 
           // GPU probe phase - GPU hash table only
+          p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+             S_keys_cpu_buf, S_bucket_ids_cpu_buf);
+          p2(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+             S_bucket_ids_cpu_buf, bucket_total_cpu_buf);
+          p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+             S_keys_cpu_buf, S_bucket_ids_cpu_buf, bucket_keys_cpu_buf,
+             S_key_indices_cpu_buf, S_match_found_cpu_buf);
+          probe_events[1] =
+              p4(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+                 S_keys_cpu_buf, S_rids_cpu_buf, S_key_indices_cpu_buf,
+                 S_match_found_cpu_buf, bucket_key_rids_cpu_buf,
+                 S_bucket_ids_cpu_buf, result_key_cpu_buf, result_rid_cpu_buf,
+                 result_sid_cpu_buf, result_count_cpu_buf);
+          cpu_queue.flush();
           p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
              S_keys_gpu_buf, S_bucket_ids_gpu_buf);
-
-          // p2: check bucket validity
           p2(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
-             S_bucket_ids_gpu_buf, bucket_total_cpu_buf);
-
-          // p3: search key lists
+             S_bucket_ids_gpu_buf, bucket_total_gpu_buf);
           p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
              S_keys_gpu_buf, S_bucket_ids_gpu_buf, bucket_keys_cpu_buf,
              S_key_indices_gpu_buf, S_match_found_gpu_buf);
-
-          // p4: join matching records
           probe_events[0] =
               p4(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
                  S_keys_gpu_buf, S_rids_gpu_buf, S_key_indices_gpu_buf,
@@ -980,26 +1011,6 @@ int main(int argc, char *argv[]) {
           gpu_queue.flush();
 
           // CPU probe phase - CPU hash table only
-          p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
-             S_keys_cpu_buf, S_bucket_ids_cpu_buf);
-
-          // p2: check bucket validity
-          p2(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
-             S_bucket_ids_cpu_buf, bucket_total_cpu_buf);
-
-          // p3: search key lists
-          p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
-             S_keys_cpu_buf, S_bucket_ids_cpu_buf, bucket_keys_cpu_buf,
-             S_key_indices_cpu_buf, S_match_found_cpu_buf);
-
-          // p4: join matching records
-          probe_events[1] =
-              p4(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
-                 S_keys_cpu_buf, S_rids_cpu_buf, S_key_indices_cpu_buf,
-                 S_match_found_cpu_buf, bucket_key_rids_cpu_buf,
-                 S_bucket_ids_cpu_buf, result_key_cpu_buf, result_rid_cpu_buf,
-                 result_sid_cpu_buf, result_count_cpu_buf);
-          cpu_queue.flush();
 
           // 두 device의 probe phase 완료 대기
           cl_event event_handles[2] = {probe_events[0](), probe_events[1]()};
@@ -1532,6 +1543,518 @@ int main(int argc, char *argv[]) {
                       << (opencl_pass ? "PASS" : "FAIL") << "\n";
           }
         } // end of else block (normal mode)
+      } else if (deviceIndex == 4) { // PL optimization
+        // CPU + GPU context
+        cl::Device CPU = devices[0];
+        cl::Device GPU = devices[1];
+        std::vector<cl::Device> chosen_device;
+        chosen_device.push_back(CPU);
+        chosen_device.push_back(GPU);
+        cl::Context context(chosen_device);
+        cl::CommandQueue cpu_queue(context, CPU, CL_QUEUE_PROFILING_ENABLE);
+        cl::CommandQueue gpu_queue(context, GPU, CL_QUEUE_PROFILING_ENABLE);
+
+        cl::Program program(context, util::loadProgram("hj.cl"), true);
+        cl::make_kernel<cl::Buffer, cl::Buffer> b1(program, "b1");
+        cl::make_kernel<cl::Buffer, cl::Buffer> b2(program, "b2");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b3(
+            program, "b3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer> b4(
+            program, "b4");
+        cl::make_kernel<cl::Buffer, cl::Buffer> p1(program, "p1");
+        cl::make_kernel<cl::Buffer, cl::Buffer> p2(program, "p2");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer,
+                        cl::Buffer>
+            p3(program, "p3");
+        cl::make_kernel<cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer,
+                        cl::Buffer, cl::Buffer, cl::Buffer, cl::Buffer,
+                        cl::Buffer, cl::Buffer>
+            p4(program, "p4");
+
+        // Host buffers
+        std::vector<uint32_t> R_keys(R_LENGTH), R_rids(R_LENGTH),
+            S_keys(S_LENGTH), S_rids(S_LENGTH);
+        for (int i = 0; i < R_LENGTH; i++) {
+          R_keys[i] = R[i].key;
+          R_rids[i] = R[i].rid;
+        }
+        for (int i = 0; i < S_LENGTH; i++) {
+          S_keys[i] = S[i].key;
+          S_rids[i] = S[i].rid;
+        }
+
+        // Device buffers
+        cl::Buffer R_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                              sizeof(uint32_t) * R_LENGTH, &R_keys[0]);
+        cl::Buffer S_keys_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                              sizeof(uint32_t) * S_LENGTH, &S_keys[0]);
+        cl::Buffer R_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                              sizeof(uint32_t) * R_LENGTH, &R_rids[0]);
+        cl::Buffer S_rids_buf(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                              sizeof(uint32_t) * S_LENGTH, &S_rids[0]);
+
+        // Build-side buffers (single CPU table)
+        cl::Buffer R_bucket_ids_buf(context, CL_MEM_READ_WRITE,
+                                    sizeof(uint32_t) * R_LENGTH);
+        cl::Buffer bucket_total_buf(context,
+                                    CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                    sizeof(uint32_t) * BUCKET_HEADER_NUMBER);
+        cl::Buffer bucket_keys_buf(
+            context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+            sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET);
+        cl::Buffer key_indices_buf(context, CL_MEM_READ_WRITE,
+                                   sizeof(uint32_t) * R_LENGTH);
+        cl::Buffer bucket_key_rids_buf(
+            context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+            sizeof(uint32_t) * BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET *
+                MAX_RIDS_PER_KEY);
+
+        // Probe-side buffers (shared)
+        cl::Buffer S_bucket_ids_buf(context, CL_MEM_READ_WRITE,
+                                    sizeof(uint32_t) * S_LENGTH);
+        cl::Buffer S_key_indices_buf(context, CL_MEM_READ_WRITE,
+                                     sizeof(int) * S_LENGTH);
+        cl::Buffer S_match_found_buf(context, CL_MEM_READ_WRITE,
+                                     sizeof(uint32_t) * S_LENGTH);
+
+        size_t max_result_size = (size_t)S_LENGTH * MAX_RIDS_PER_KEY;
+        cl::Buffer result_key_buf(context,
+                                  CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                  sizeof(uint32_t) * max_result_size);
+        cl::Buffer result_rid_buf(context,
+                                  CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                  sizeof(uint32_t) * max_result_size);
+        cl::Buffer result_sid_buf(context,
+                                  CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                  sizeof(uint32_t) * max_result_size);
+        cl::Buffer result_count_buf(context,
+                                    CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                    sizeof(uint32_t) * S_LENGTH);
+
+        // Initialize tables
+        std::vector<uint32_t> bucket_totalNumcounts(BUCKET_HEADER_NUMBER, 0);
+        std::vector<uint32_t> bucket_key_rids_init(
+            BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY,
+            0xffffffffu);
+        std::vector<uint32_t> bucket_keys_init(
+            BUCKET_HEADER_NUMBER * MAX_KEYS_PER_BUCKET, 0xffffffffu);
+        std::vector<uint32_t> result_count_init(S_LENGTH, 0);
+
+        cpu_queue.enqueueWriteBuffer(bucket_total_buf, CL_TRUE, 0,
+                                     sizeof(uint32_t) * BUCKET_HEADER_NUMBER,
+                                     &bucket_totalNumcounts[0]);
+        cpu_queue.enqueueWriteBuffer(bucket_key_rids_buf, CL_TRUE, 0,
+                                     sizeof(uint32_t) * BUCKET_HEADER_NUMBER *
+                                         MAX_KEYS_PER_BUCKET * MAX_RIDS_PER_KEY,
+                                     &bucket_key_rids_init[0]);
+        cpu_queue.enqueueWriteBuffer(bucket_keys_buf, CL_TRUE, 0,
+                                     sizeof(uint32_t) * BUCKET_HEADER_NUMBER *
+                                         MAX_KEYS_PER_BUCKET,
+                                     &bucket_keys_init[0]);
+        cpu_queue.enqueueWriteBuffer(result_count_buf, CL_TRUE, 0,
+                                     sizeof(uint32_t) * S_LENGTH,
+                                     &result_count_init[0]);
+
+        std::cout << "\n=== PL Optimization ===" << std::endl;
+        std::cout << "Build: CPU-only" << std::endl;
+
+        // CPU-only build
+        util::Timer timer;
+        timer.reset();
+        b1(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_keys_buf,
+           R_bucket_ids_buf);
+        b2(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_bucket_ids_buf,
+           bucket_total_buf);
+        b3(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_keys_buf,
+           R_bucket_ids_buf, bucket_keys_buf, key_indices_buf);
+        b4(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_rids_buf,
+           R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
+        cpu_queue.finish();
+        std::cout << "Build time: " << timer.getTimeMilliseconds() << " ms"
+                  << std::endl;
+
+        // Helper to align portions
+        auto align4096 = [](size_t v) { return (v / 4096) * 4096; };
+
+        // Benchmark per-step: p1, p3, p4 (only used when run_bench)
+        if (run_bench) {
+          double best_p1_time = 1e9;
+          size_t best_p1_gpu_ratio = 0;
+          double best_p3_time = 1e9;
+          size_t best_p3_gpu_ratio = 0;
+          double best_p4_time = 1e9;
+          size_t best_p4_gpu_ratio = 0;
+          int num_iterations = 10;
+          double p1_time, p3_time, p4_time = 0;
+          for (int ratio = 0; ratio <= 50; ratio += 2) {
+            std::cout << "\nGPU ratio: " << ratio << std::endl;
+            size_t gpu_portion = align4096((size_t)S_LENGTH * ratio / 100);
+            size_t cpu_portion = align4096(S_LENGTH - gpu_portion);
+            gpu_portion = S_LENGTH - cpu_portion;
+            if (gpu_portion == 0 || cpu_portion == 0)
+              continue;
+            p1_time = 0;
+            p3_time = 0;
+            p4_time = 0;
+            for (int iter = 0; iter < num_iterations; iter++) {
+              // Sub-buffers
+              cl_buffer_region gpu_keys_region = {0, sizeof(uint32_t) *
+                                                         gpu_portion};
+              cl_buffer_region gpu_rids_region = {0, sizeof(uint32_t) *
+                                                         gpu_portion};
+              cl_buffer_region gpu_ids_region = {0, sizeof(uint32_t) *
+                                                        gpu_portion};
+              cl_buffer_region gpu_kidx_region = {0, sizeof(int) * gpu_portion};
+              cl_buffer_region gpu_match_region = {0, sizeof(uint32_t) *
+                                                          gpu_portion};
+              cl_buffer_region gpu_res_key_region = {
+                  0, sizeof(uint32_t) * gpu_portion * MAX_RIDS_PER_KEY};
+              cl_buffer_region gpu_res_rid_region = {
+                  0, sizeof(uint32_t) * gpu_portion * MAX_RIDS_PER_KEY};
+              cl_buffer_region gpu_res_sid_region = {
+                  0, sizeof(uint32_t) * gpu_portion * MAX_RIDS_PER_KEY};
+              cl_buffer_region gpu_res_cnt_region = {0, sizeof(uint32_t) *
+                                                            gpu_portion};
+
+              cl_buffer_region cpu_keys_region = {
+                  sizeof(uint32_t) * gpu_portion,
+                  sizeof(uint32_t) * cpu_portion};
+              cl_buffer_region cpu_rids_region = {
+                  sizeof(uint32_t) * gpu_portion,
+                  sizeof(uint32_t) * cpu_portion};
+              cl_buffer_region cpu_ids_region = {sizeof(uint32_t) * gpu_portion,
+                                                 sizeof(uint32_t) *
+                                                     cpu_portion};
+              cl_buffer_region cpu_kidx_region = {sizeof(int) *
+                                                      (ptrdiff_t)gpu_portion,
+                                                  sizeof(int) * cpu_portion};
+              cl_buffer_region cpu_match_region = {
+                  sizeof(uint32_t) * gpu_portion,
+                  sizeof(uint32_t) * cpu_portion};
+              cl_buffer_region cpu_res_key_region = {
+                  sizeof(uint32_t) * gpu_portion * MAX_RIDS_PER_KEY,
+                  sizeof(uint32_t) * cpu_portion * MAX_RIDS_PER_KEY};
+              cl_buffer_region cpu_res_rid_region = {
+                  sizeof(uint32_t) * gpu_portion * MAX_RIDS_PER_KEY,
+                  sizeof(uint32_t) * cpu_portion * MAX_RIDS_PER_KEY};
+              cl_buffer_region cpu_res_sid_region = {
+                  sizeof(uint32_t) * gpu_portion * MAX_RIDS_PER_KEY,
+                  sizeof(uint32_t) * cpu_portion * MAX_RIDS_PER_KEY};
+              cl_buffer_region cpu_res_cnt_region = {
+                  sizeof(uint32_t) * gpu_portion,
+                  sizeof(uint32_t) * cpu_portion};
+
+              cl::Buffer S_keys_gpu_buf = S_keys_buf.createSubBuffer(
+                  CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+                  &gpu_keys_region);
+              cl::Buffer S_rids_gpu_buf = S_rids_buf.createSubBuffer(
+                  CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+                  &gpu_rids_region);
+              cl::Buffer S_bucket_ids_gpu_buf =
+                  S_bucket_ids_buf.createSubBuffer(CL_MEM_READ_WRITE,
+                                                   CL_BUFFER_CREATE_TYPE_REGION,
+                                                   &gpu_ids_region);
+              cl::Buffer S_key_indices_gpu_buf =
+                  S_key_indices_buf.createSubBuffer(
+                      CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                      &gpu_kidx_region);
+              cl::Buffer S_match_found_gpu_buf =
+                  S_match_found_buf.createSubBuffer(
+                      CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                      &gpu_match_region);
+              cl::Buffer result_key_gpu_buf = result_key_buf.createSubBuffer(
+                  CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                  &gpu_res_key_region);
+              cl::Buffer result_rid_gpu_buf = result_rid_buf.createSubBuffer(
+                  CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                  &gpu_res_rid_region);
+              cl::Buffer result_sid_gpu_buf = result_sid_buf.createSubBuffer(
+                  CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                  &gpu_res_sid_region);
+              cl::Buffer result_count_gpu_buf =
+                  result_count_buf.createSubBuffer(CL_MEM_READ_WRITE,
+                                                   CL_BUFFER_CREATE_TYPE_REGION,
+                                                   &gpu_res_cnt_region);
+
+              cl::Buffer S_keys_cpu_buf = S_keys_buf.createSubBuffer(
+                  CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+                  &cpu_keys_region);
+              cl::Buffer S_rids_cpu_buf = S_rids_buf.createSubBuffer(
+                  CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+                  &cpu_rids_region);
+              cl::Buffer S_bucket_ids_cpu_sub =
+                  S_bucket_ids_buf.createSubBuffer(CL_MEM_READ_WRITE,
+                                                   CL_BUFFER_CREATE_TYPE_REGION,
+                                                   &cpu_ids_region);
+              cl::Buffer S_key_indices_cpu_sub =
+                  S_key_indices_buf.createSubBuffer(
+                      CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                      &cpu_kidx_region);
+              cl::Buffer S_match_found_cpu_sub =
+                  S_match_found_buf.createSubBuffer(
+                      CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                      &cpu_match_region);
+              cl::Buffer result_key_cpu_buf = result_key_buf.createSubBuffer(
+                  CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                  &cpu_res_key_region);
+              cl::Buffer result_rid_cpu_buf = result_rid_buf.createSubBuffer(
+                  CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                  &cpu_res_rid_region);
+              cl::Buffer result_sid_cpu_buf = result_sid_buf.createSubBuffer(
+                  CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+                  &cpu_res_sid_region);
+              cl::Buffer result_count_cpu_buf =
+                  result_count_buf.createSubBuffer(CL_MEM_READ_WRITE,
+                                                   CL_BUFFER_CREATE_TYPE_REGION,
+                                                   &cpu_res_cnt_region);
+
+              util::Timer t;
+              t.reset();
+              cl::Event evs[2];
+
+              evs[0] = p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+                          S_keys_cpu_buf, S_bucket_ids_cpu_sub);
+              cpu_queue.flush();
+              evs[1] = p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                          S_keys_gpu_buf, S_bucket_ids_gpu_buf);
+              gpu_queue.flush();
+              cl_event hs[2] = {evs[0](), evs[1]()};
+              clWaitForEvents(2, hs);
+              p1_time += t.getTimeMilliseconds();
+
+              // p3 for gpu
+              util::Timer t3;
+              t3.reset();
+              cl::Event ev3[2];
+              ev3[0] = p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                          S_keys_gpu_buf, S_bucket_ids_gpu_buf, bucket_keys_buf,
+                          S_key_indices_gpu_buf, S_match_found_gpu_buf);
+              // p3 for cpu
+              ev3[1] = p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+                          S_keys_cpu_buf, S_bucket_ids_cpu_sub, bucket_keys_buf,
+                          S_key_indices_cpu_sub, S_match_found_cpu_sub);
+              cpu_queue.flush();
+              gpu_queue.flush();
+              cl_event eh3[2] = {ev3[0](), ev3[1]()};
+              clWaitForEvents(2, eh3);
+              // compute best ratio for p3
+              p3_time += t3.getTimeMilliseconds();
+
+              // p4 for gpu
+              util::Timer t4;
+              t4.reset();
+              cl::Event ev4[2];
+              ev4[0] = p4(cl::EnqueueArgs(gpu_queue, cl::NDRange(gpu_portion)),
+                          S_keys_gpu_buf, S_rids_gpu_buf, S_key_indices_gpu_buf,
+                          S_match_found_gpu_buf, bucket_key_rids_buf,
+                          S_bucket_ids_gpu_buf, result_key_gpu_buf,
+                          result_rid_gpu_buf, result_sid_gpu_buf,
+                          result_count_gpu_buf);
+              // p4 for cpu
+              ev4[1] = p4(cl::EnqueueArgs(cpu_queue, cl::NDRange(cpu_portion)),
+                          S_keys_cpu_buf, S_rids_cpu_buf, S_key_indices_cpu_sub,
+                          S_match_found_cpu_sub, bucket_key_rids_buf,
+                          S_bucket_ids_cpu_sub, result_key_cpu_buf,
+                          result_rid_cpu_buf, result_sid_cpu_buf,
+                          result_count_cpu_buf);
+              cpu_queue.flush();
+              gpu_queue.flush();
+              cl_event eh4[2] = {ev4[0](), ev4[1]()};
+              clWaitForEvents(2, eh4);
+              // compute best ratio for p4
+              p4_time += t4.getTimeMilliseconds();
+            }
+            p1_time /= num_iterations;
+            p3_time /= num_iterations;
+            p4_time /= num_iterations;
+            std::cout << "p1 time: " << p1_time << std::endl;
+            std::cout << "p3 time: " << p3_time << std::endl;
+            std::cout << "p4 time: " << p4_time << std::endl;
+            if (p1_time < best_p1_time) {
+              best_p1_time = p1_time;
+              best_p1_gpu_ratio = ratio;
+            }
+            if (p3_time < best_p3_time) {
+              best_p3_time = p3_time;
+              best_p3_gpu_ratio = ratio;
+            }
+            if (p4_time < best_p4_time) {
+              best_p4_time = p4_time;
+              best_p4_gpu_ratio = ratio;
+            }
+          }
+        } else {
+          size_t p1_gpu = 331776, p3_gpu = 667648, p4_gpu = 667648;
+          size_t p1_cpu = S_LENGTH - p1_gpu;
+
+          // Run p1 with best split to prepare for p3
+          cl_buffer_region p1_gpu_keys_region = {0, sizeof(uint32_t) * p1_gpu};
+          cl_buffer_region p1_gpu_ids_region = {0, sizeof(uint32_t) * p1_gpu};
+          cl_buffer_region p1_cpu_keys_region = {sizeof(uint32_t) * p1_gpu,
+                                                 sizeof(uint32_t) * p1_cpu};
+          cl_buffer_region p1_cpu_ids_region = {sizeof(uint32_t) * p1_gpu,
+                                                sizeof(uint32_t) * p1_cpu};
+          cl::Buffer p1_S_keys_gpu = S_keys_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p1_gpu_keys_region);
+          cl::Buffer p1_S_keys_cpu = S_keys_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p1_cpu_keys_region);
+          cl::Buffer p1_ids_gpu = S_bucket_ids_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p1_gpu_ids_region);
+          cl::Buffer p1_ids_cpu = S_bucket_ids_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p1_cpu_ids_region);
+          cl_event event[2];
+          p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(p1_gpu)), p1_S_keys_gpu,
+             p1_ids_gpu);
+          gpu_queue.flush();
+          p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(p1_cpu)), p1_S_keys_cpu,
+             p1_ids_cpu);
+          cpu_queue.flush();
+          clWaitForEvents(2, event);
+          size_t p3_cpu = S_LENGTH - p3_gpu;
+
+          // Run p3 with best split to prepare p4
+          cl_buffer_region p3_gpu_keys_region = {0, sizeof(uint32_t) * p3_gpu};
+          cl_buffer_region p3_gpu_ids_region = {0, sizeof(uint32_t) * p3_gpu};
+          cl_buffer_region p3_gpu_kidx_region = {0, sizeof(int) * p3_gpu};
+          cl_buffer_region p3_gpu_match_region = {0, sizeof(uint32_t) * p3_gpu};
+          cl_buffer_region p3_cpu_keys_region = {sizeof(uint32_t) * p3_gpu,
+                                                 sizeof(uint32_t) * p3_cpu};
+          cl_buffer_region p3_cpu_ids_region = {sizeof(uint32_t) * p3_gpu,
+                                                sizeof(uint32_t) * p3_cpu};
+          cl_buffer_region p3_cpu_kidx_region = {
+              sizeof(int) * (ptrdiff_t)p3_gpu, sizeof(int) * p3_cpu};
+          cl_buffer_region p3_cpu_match_region = {sizeof(uint32_t) * p3_gpu,
+                                                  sizeof(uint32_t) * p3_cpu};
+          cl::Buffer p3_S_keys_gpu = S_keys_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_gpu_keys_region);
+          cl::Buffer p3_S_keys_cpu = S_keys_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_cpu_keys_region);
+          cl::Buffer p3_ids_gpu = S_bucket_ids_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_gpu_ids_region);
+          cl::Buffer p3_ids_cpu = S_bucket_ids_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_cpu_ids_region);
+          cl::Buffer p3_kidx_gpu = S_key_indices_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_gpu_kidx_region);
+          cl::Buffer p3_kidx_cpu = S_key_indices_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_cpu_kidx_region);
+          cl::Buffer p3_match_gpu = S_match_found_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_gpu_match_region);
+          cl::Buffer p3_match_cpu = S_match_found_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p3_cpu_match_region);
+          p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(p3_gpu)), p3_S_keys_gpu,
+             p3_ids_gpu, bucket_keys_buf, p3_kidx_gpu, p3_match_gpu);
+          gpu_queue.flush();
+          p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(p3_cpu)), p3_S_keys_cpu,
+             p3_ids_cpu, bucket_keys_buf, p3_kidx_cpu, p3_match_cpu);
+          cpu_queue.flush();
+          clWaitForEvents(2, event);
+          size_t p4_cpu = S_LENGTH - p4_gpu;
+
+          // Run final probe with best splits
+          std::cout << "Default splits - "
+                    << "p1 GPU: " << p1_gpu << ", p3 GPU: " << p3_gpu
+                    << ", p4 GPU: " << p4_gpu << std::endl;
+
+          // p1 already done for p1_gpu/p1_cpu; ensure p1 covers full S if
+          // splits differ
+          if (p1_gpu != p3_gpu || p1_gpu != p4_gpu) {
+            // Recompute S_bucket_ids for full S to simplify
+            p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(S_LENGTH)), S_keys_buf,
+               S_bucket_ids_buf);
+            gpu_queue.finish();
+          }
+
+          // p3 with best split
+          // reuse p3_* buffers
+          p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(p3_gpu)), p3_S_keys_gpu,
+             p3_ids_gpu, bucket_keys_buf, p3_kidx_gpu, p3_match_gpu);
+          p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(p3_cpu)), p3_S_keys_cpu,
+             p3_ids_cpu, bucket_keys_buf, p3_kidx_cpu, p3_match_cpu);
+
+          // p4 with best split
+          cl_buffer_region p4_gpu_rids_region = {0, sizeof(uint32_t) * p4_gpu};
+          cl_buffer_region p4_gpu_res_key_region = {
+              0, sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY};
+          cl_buffer_region p4_gpu_res_rid_region = {
+              0, sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY};
+          cl_buffer_region p4_gpu_res_sid_region = {
+              0, sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY};
+          cl_buffer_region p4_gpu_res_cnt_region = {0,
+                                                    sizeof(uint32_t) * p4_gpu};
+          cl_buffer_region p4_cpu_rids_region = {sizeof(uint32_t) * p4_gpu,
+                                                 sizeof(uint32_t) * p4_cpu};
+          cl_buffer_region p4_cpu_res_key_region = {
+              sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY,
+              sizeof(uint32_t) * p4_cpu * MAX_RIDS_PER_KEY};
+          cl_buffer_region p4_cpu_res_rid_region = {
+              sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY,
+              sizeof(uint32_t) * p4_cpu * MAX_RIDS_PER_KEY};
+          cl_buffer_region p4_cpu_res_sid_region = {
+              sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY,
+              sizeof(uint32_t) * p4_cpu * MAX_RIDS_PER_KEY};
+          cl_buffer_region p4_cpu_res_cnt_region = {sizeof(uint32_t) * p4_gpu,
+                                                    sizeof(uint32_t) * p4_cpu};
+          cl::Buffer p4_S_rids_gpu = S_rids_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_rids_region);
+          cl::Buffer p4_S_rids_cpu = S_rids_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_rids_region);
+          cl::Buffer p4_res_key_gpu = result_key_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_res_key_region);
+          cl::Buffer p4_res_rid_gpu = result_rid_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_res_rid_region);
+          cl::Buffer p4_res_sid_gpu = result_sid_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_res_sid_region);
+          cl::Buffer p4_res_cnt_gpu = result_count_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_res_cnt_region);
+          cl::Buffer p4_res_key_cpu = result_key_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_res_key_region);
+          cl::Buffer p4_res_rid_cpu = result_rid_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_res_rid_region);
+          cl::Buffer p4_res_sid_cpu = result_sid_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_res_sid_region);
+          cl::Buffer p4_res_cnt_cpu = result_count_buf.createSubBuffer(
+              CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_res_cnt_region);
+
+          util::Timer probe_timer;
+          probe_timer.reset();
+          cl::Event pe[2];
+          pe[0] = p4(cl::EnqueueArgs(gpu_queue, cl::NDRange(p4_gpu)),
+                     p3_S_keys_gpu, p4_S_rids_gpu, p3_kidx_gpu, p3_match_gpu,
+                     bucket_key_rids_buf, p3_ids_gpu, p4_res_key_gpu,
+                     p4_res_rid_gpu, p4_res_sid_gpu, p4_res_cnt_gpu);
+          pe[1] = p4(cl::EnqueueArgs(cpu_queue, cl::NDRange(p4_cpu)),
+                     p3_S_keys_cpu, p4_S_rids_cpu, p3_kidx_cpu, p3_match_cpu,
+                     bucket_key_rids_buf, p3_ids_cpu, p4_res_key_cpu,
+                     p4_res_rid_cpu, p4_res_sid_cpu, p4_res_cnt_cpu);
+          cpu_queue.flush();
+          gpu_queue.flush();
+          cl_event peh[2] = {pe[0](), pe[1]()};
+          clWaitForEvents(2, peh);
+          std::cout << "Probe time: " << probe_timer.getTimeMilliseconds()
+                    << " ms" << std::endl;
+        }
       }
     } else { // run partitioned hash join
     }
