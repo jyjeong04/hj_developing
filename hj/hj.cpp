@@ -191,7 +191,6 @@ int main(int argc, char *argv[]) {
       }
     }
     bool partitioned_join = false;
-    // Call shj function
     std::vector<cl::Device> devices;
     unsigned numDevices = getDeviceList(devices);
 
@@ -561,6 +560,12 @@ int main(int argc, char *argv[]) {
             ((R_LENGTH * WORK_RATIO_GPU / 100) / 4096) * 4096;
         size_t cpu_R_portion = ((R_LENGTH - gpu_R_portion) / 4096) * 4096;
         gpu_R_portion = R_LENGTH - cpu_R_portion;
+
+        // gpu_R_portion의 최소값을 4096으로 보장
+        if (gpu_R_portion == 0 && R_LENGTH >= 4096) {
+          gpu_R_portion = 4096;
+          cpu_R_portion = R_LENGTH - gpu_R_portion;
+        }
 
         std::cout << "\nR data distribution: GPU " << gpu_R_portion
                   << " tuples, CPU " << cpu_R_portion << " tuples" << std::endl;
@@ -1394,59 +1399,36 @@ int main(int argc, char *argv[]) {
                     << std::endl;
         } else {
           std::cout << "\n=== OpenCL Build Phase (OL) ===" << std::endl;
+          std::cout << "b1: CPU, b2: CPU, b3: CPU, b4: GPU" << std::endl;
+          std::cout << "p1: CPU, p2: CPU, p3: CPU, p4: GPU" << std::endl;
           util::Timer opencl_timer;
           opencl_timer.reset();
 
-          // b1: compute hash bucket number - CPU
-          std::cout << "b1: CPU" << std::endl;
           b1(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_keys_buf,
              R_bucket_ids_buf);
 
-          // b2: update bucket header - CPU
-          std::cout << "b2: CPU" << std::endl;
           b2(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)),
              R_bucket_ids_buf, bucket_total_buf);
-          // b3: manage key lists - CPU
-          std::cout << "b3: CPU" << std::endl;
-          b3(cl::EnqueueArgs(gpu_queue, cl::NDRange(R_LENGTH)), R_keys_buf,
+          b3(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_keys_buf,
              R_bucket_ids_buf, bucket_keys_buf, key_indices_buf);
+          b4(cl::EnqueueArgs(gpu_queue, cl::NDRange(R_LENGTH)), R_rids_buf,
+             R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
 
-          // b4: insert record ids - GPU
-          std::cout << "b4: GPU" << std::endl;
-          cl::Event b4_event =
-              b4(cl::EnqueueArgs(gpu_queue, cl::NDRange(R_LENGTH)), R_rids_buf,
-                 R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
-
-          // Probe Phase
-          std::cout << "\n=== OpenCL Probe Phase (OL) ===" << std::endl;
-
-          // p1: compute hash bucket number - CPU
-          std::cout << "p1: CPU" << std::endl;
           p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(S_LENGTH)), S_keys_buf,
              S_bucket_ids_buf);
-
-          // p2: check bucket validity - CPU
-          std::cout << "p2: CPU" << std::endl;
           p2(cl::EnqueueArgs(cpu_queue, cl::NDRange(S_LENGTH)),
              S_bucket_ids_buf, bucket_total_buf);
-          // p3: search key lists - CPU
-          std::cout << "p3: CPU" << std::endl;
           p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(S_LENGTH)), S_keys_buf,
              S_bucket_ids_buf, bucket_keys_buf, S_key_indices_buf,
              S_match_found_buf);
-
-          // p4: join matching records - GPU
-          std::cout << "p4: GPU" << std::endl;
           cl::Event p4_event =
-              p4(cl::EnqueueArgs(cpu_queue, cl::NDRange(S_LENGTH)), S_keys_buf,
+              p4(cl::EnqueueArgs(gpu_queue, cl::NDRange(S_LENGTH)), S_keys_buf,
                  S_rids_buf, S_key_indices_buf, S_match_found_buf,
                  bucket_key_rids_buf, S_bucket_ids_buf, result_key_buf,
                  result_rid_buf, result_sid_buf, result_count_buf);
-
           cpu_queue.flush();
           gpu_queue.flush();
           p4_event.wait();
-
           double probe_time = opencl_timer.getTimeMilliseconds();
           std::cout << "OpenCL Hash Join Total: " << probe_time << " ms"
                     << std::endl;
@@ -1670,8 +1652,8 @@ int main(int argc, char *argv[]) {
         b4(cl::EnqueueArgs(cpu_queue, cl::NDRange(R_LENGTH)), R_rids_buf,
            R_bucket_ids_buf, key_indices_buf, bucket_key_rids_buf);
         cpu_queue.finish();
-        std::cout << "Build time: " << timer.getTimeMilliseconds() << " ms"
-                  << std::endl;
+        double build_time = timer.getTimeMilliseconds();
+        std::cout << "Build time: " << build_time << " ms" << std::endl;
 
         // Helper to align portions
         auto align4096 = [](size_t v) { return (v / 4096) * 4096; };
@@ -1884,8 +1866,13 @@ int main(int argc, char *argv[]) {
             }
           }
         } else {
-          size_t p1_gpu = 331776, p3_gpu = 667648, p4_gpu = 667648;
+          size_t p1_gpu = 667648, p3_gpu = 667648, p4_gpu = 331776;
           size_t p1_cpu = S_LENGTH - p1_gpu;
+          std::cout << "p1 GPU: " << p1_gpu << ", p3 GPU: " << p3_gpu
+                    << ", p4 GPU: " << p4_gpu << std::endl;
+
+          util::Timer probe_timer;
+          probe_timer.reset();
 
           // Run p1 with best split to prepare for p3
           cl_buffer_region p1_gpu_keys_region = {0, sizeof(uint32_t) * p1_gpu};
@@ -1906,17 +1893,20 @@ int main(int argc, char *argv[]) {
           cl::Buffer p1_ids_cpu = S_bucket_ids_buf.createSubBuffer(
               CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
               &p1_cpu_ids_region);
-          cl_event event[2];
-          p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(p1_gpu)), p1_S_keys_gpu,
-             p1_ids_gpu);
-          gpu_queue.flush();
-          p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(p1_cpu)), p1_S_keys_cpu,
-             p1_ids_cpu);
-          cpu_queue.flush();
-          clWaitForEvents(2, event);
-          size_t p3_cpu = S_LENGTH - p3_gpu;
 
-          // Run p3 with best split to prepare p4
+          cl::Event p1_events[2];
+          p1_events[0] = p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(p1_gpu)),
+                            p1_S_keys_gpu, p1_ids_gpu);
+          p1_events[1] = p1(cl::EnqueueArgs(cpu_queue, cl::NDRange(p1_cpu)),
+                            p1_S_keys_cpu, p1_ids_cpu);
+          cpu_queue.flush();
+          gpu_queue.flush();
+          cl_event p1_eh[2] = {p1_events[0](), p1_events[1]()};
+          clWaitForEvents(2, p1_eh);
+          size_t p3_cpu = S_LENGTH - p3_gpu;
+          size_t p4_cpu = S_LENGTH - p4_gpu;
+
+          // p3 with best split
           cl_buffer_region p3_gpu_keys_region = {0, sizeof(uint32_t) * p3_gpu};
           cl_buffer_region p3_gpu_ids_region = {0, sizeof(uint32_t) * p3_gpu};
           cl_buffer_region p3_gpu_kidx_region = {0, sizeof(int) * p3_gpu};
@@ -1953,38 +1943,28 @@ int main(int argc, char *argv[]) {
           cl::Buffer p3_match_cpu = S_match_found_buf.createSubBuffer(
               CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
               &p3_cpu_match_region);
-          p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(p3_gpu)), p3_S_keys_gpu,
-             p3_ids_gpu, bucket_keys_buf, p3_kidx_gpu, p3_match_gpu);
-          gpu_queue.flush();
-          p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(p3_cpu)), p3_S_keys_cpu,
-             p3_ids_cpu, bucket_keys_buf, p3_kidx_cpu, p3_match_cpu);
+
+          cl::Event p3_final_events[2];
+          p3_final_events[0] =
+              p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(p3_gpu)), p3_S_keys_gpu,
+                 p3_ids_gpu, bucket_keys_buf, p3_kidx_gpu, p3_match_gpu);
+          p3_final_events[1] =
+              p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(p3_cpu)), p3_S_keys_cpu,
+                 p3_ids_cpu, bucket_keys_buf, p3_kidx_cpu, p3_match_cpu);
           cpu_queue.flush();
-          clWaitForEvents(2, event);
-          size_t p4_cpu = S_LENGTH - p4_gpu;
-
-          // Run final probe with best splits
-          std::cout << "Default splits - "
-                    << "p1 GPU: " << p1_gpu << ", p3 GPU: " << p3_gpu
-                    << ", p4 GPU: " << p4_gpu << std::endl;
-
-          // p1 already done for p1_gpu/p1_cpu; ensure p1 covers full S if
-          // splits differ
-          if (p1_gpu != p3_gpu || p1_gpu != p4_gpu) {
-            // Recompute S_bucket_ids for full S to simplify
-            p1(cl::EnqueueArgs(gpu_queue, cl::NDRange(S_LENGTH)), S_keys_buf,
-               S_bucket_ids_buf);
-            gpu_queue.finish();
-          }
-
-          // p3 with best split
-          // reuse p3_* buffers
-          p3(cl::EnqueueArgs(gpu_queue, cl::NDRange(p3_gpu)), p3_S_keys_gpu,
-             p3_ids_gpu, bucket_keys_buf, p3_kidx_gpu, p3_match_gpu);
-          p3(cl::EnqueueArgs(cpu_queue, cl::NDRange(p3_cpu)), p3_S_keys_cpu,
-             p3_ids_cpu, bucket_keys_buf, p3_kidx_cpu, p3_match_cpu);
+          gpu_queue.flush();
+          cl_event p3_final_eh[2] = {p3_final_events[0](),
+                                     p3_final_events[1]()};
+          clWaitForEvents(2, p3_final_eh);
 
           // p4 with best split
+          // Create p4-specific buffers from p3 buffers (p4_gpu may differ from
+          // p3_gpu)
+          cl_buffer_region p4_gpu_keys_region = {0, sizeof(uint32_t) * p4_gpu};
           cl_buffer_region p4_gpu_rids_region = {0, sizeof(uint32_t) * p4_gpu};
+          cl_buffer_region p4_gpu_kidx_region = {0, sizeof(int) * p4_gpu};
+          cl_buffer_region p4_gpu_match_region = {0, sizeof(uint32_t) * p4_gpu};
+          cl_buffer_region p4_gpu_ids_region = {0, sizeof(uint32_t) * p4_gpu};
           cl_buffer_region p4_gpu_res_key_region = {
               0, sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY};
           cl_buffer_region p4_gpu_res_rid_region = {
@@ -1993,8 +1973,16 @@ int main(int argc, char *argv[]) {
               0, sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY};
           cl_buffer_region p4_gpu_res_cnt_region = {0,
                                                     sizeof(uint32_t) * p4_gpu};
+          cl_buffer_region p4_cpu_keys_region = {sizeof(uint32_t) * p4_gpu,
+                                                 sizeof(uint32_t) * p4_cpu};
           cl_buffer_region p4_cpu_rids_region = {sizeof(uint32_t) * p4_gpu,
                                                  sizeof(uint32_t) * p4_cpu};
+          cl_buffer_region p4_cpu_kidx_region = {
+              sizeof(int) * (ptrdiff_t)p4_gpu, sizeof(int) * p4_cpu};
+          cl_buffer_region p4_cpu_match_region = {sizeof(uint32_t) * p4_gpu,
+                                                  sizeof(uint32_t) * p4_cpu};
+          cl_buffer_region p4_cpu_ids_region = {sizeof(uint32_t) * p4_gpu,
+                                                sizeof(uint32_t) * p4_cpu};
           cl_buffer_region p4_cpu_res_key_region = {
               sizeof(uint32_t) * p4_gpu * MAX_RIDS_PER_KEY,
               sizeof(uint32_t) * p4_cpu * MAX_RIDS_PER_KEY};
@@ -2006,12 +1994,38 @@ int main(int argc, char *argv[]) {
               sizeof(uint32_t) * p4_cpu * MAX_RIDS_PER_KEY};
           cl_buffer_region p4_cpu_res_cnt_region = {sizeof(uint32_t) * p4_gpu,
                                                     sizeof(uint32_t) * p4_cpu};
+
+          // Create p4 sub-buffers from p3 buffers (use first p4_gpu elements)
+          cl::Buffer p4_S_keys_gpu = S_keys_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_keys_region);
+          cl::Buffer p4_S_keys_cpu = S_keys_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_keys_region);
           cl::Buffer p4_S_rids_gpu = S_rids_buf.createSubBuffer(
               CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
               &p4_gpu_rids_region);
           cl::Buffer p4_S_rids_cpu = S_rids_buf.createSubBuffer(
               CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
               &p4_cpu_rids_region);
+          cl::Buffer p4_kidx_gpu = S_key_indices_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_kidx_region);
+          cl::Buffer p4_kidx_cpu = S_key_indices_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_kidx_region);
+          cl::Buffer p4_match_gpu = S_match_found_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_match_region);
+          cl::Buffer p4_match_cpu = S_match_found_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_match_region);
+          cl::Buffer p4_ids_gpu = S_bucket_ids_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_gpu_ids_region);
+          cl::Buffer p4_ids_cpu = S_bucket_ids_buf.createSubBuffer(
+              CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
+              &p4_cpu_ids_region);
           cl::Buffer p4_res_key_gpu = result_key_buf.createSubBuffer(
               CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
               &p4_gpu_res_key_region);
@@ -2036,23 +2050,22 @@ int main(int argc, char *argv[]) {
           cl::Buffer p4_res_cnt_cpu = result_count_buf.createSubBuffer(
               CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
               &p4_cpu_res_cnt_region);
-
-          util::Timer probe_timer;
-          probe_timer.reset();
           cl::Event pe[2];
           pe[0] = p4(cl::EnqueueArgs(gpu_queue, cl::NDRange(p4_gpu)),
-                     p3_S_keys_gpu, p4_S_rids_gpu, p3_kidx_gpu, p3_match_gpu,
-                     bucket_key_rids_buf, p3_ids_gpu, p4_res_key_gpu,
+                     p4_S_keys_gpu, p4_S_rids_gpu, p4_kidx_gpu, p4_match_gpu,
+                     bucket_key_rids_buf, p4_ids_gpu, p4_res_key_gpu,
                      p4_res_rid_gpu, p4_res_sid_gpu, p4_res_cnt_gpu);
           pe[1] = p4(cl::EnqueueArgs(cpu_queue, cl::NDRange(p4_cpu)),
-                     p3_S_keys_cpu, p4_S_rids_cpu, p3_kidx_cpu, p3_match_cpu,
-                     bucket_key_rids_buf, p3_ids_cpu, p4_res_key_cpu,
+                     p4_S_keys_cpu, p4_S_rids_cpu, p4_kidx_cpu, p4_match_cpu,
+                     bucket_key_rids_buf, p4_ids_cpu, p4_res_key_cpu,
                      p4_res_rid_cpu, p4_res_sid_cpu, p4_res_cnt_cpu);
           cpu_queue.flush();
           gpu_queue.flush();
           cl_event peh[2] = {pe[0](), pe[1]()};
           clWaitForEvents(2, peh);
-          std::cout << "Probe time: " << probe_timer.getTimeMilliseconds()
+          double probe_time = probe_timer.getTimeMilliseconds();
+          std::cout << "Probe time: " << probe_time << " ms" << std::endl;
+          std::cout << "Build + Probe time: " << build_time + probe_time
                     << " ms" << std::endl;
         }
       }

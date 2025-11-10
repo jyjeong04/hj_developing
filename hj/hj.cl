@@ -42,21 +42,44 @@ __kernel void b3(__global const uint *R_keys, __global uint *bucket_ids,
         key_idx = i;
         break;
       } else if (current_key == 0xffffffffu) {
-        // Found empty slot, try to claim it atomically
-        uint old_val =
-            atomic_cmpxchg(&bucket_keys[bucket_offset + i], 0xffffffffu, key);
+        // Found empty slot, try to claim it with retry mechanism
+        // Instead of atomic_cmpxchg, use retry loop with verification
+        bool claimed = false;
+        const int max_retries = 10; // Maximum retry attempts
 
-        if (old_val == 0xffffffffu) {
-          // Successfully claimed this slot
-          key_idx = i;
-          break;
-        } else if (old_val == key) {
-          // Another thread just inserted our key
-          key_idx = i;
+        for (int retry = 0; retry < max_retries; retry++) {
+          // Double-check: read again to ensure slot is still empty
+          uint check_key = bucket_keys[bucket_offset + i];
+
+          if (check_key == key) {
+            // Another thread inserted our key
+            key_idx = i;
+            claimed = true;
+            break;
+          } else if (check_key == 0xffffffffu) {
+            // Slot is still empty, try to write our key
+            bucket_keys[bucket_offset + i] = key;
+
+            // Verify: read back to check if we successfully claimed it
+            uint verify_key = bucket_keys[bucket_offset + i];
+
+            if (verify_key == key) {
+              // Successfully claimed this slot
+              key_idx = i;
+              claimed = true;
+              break;
+            }
+            // else: Another thread wrote a different key, retry
+          } else {
+            // Slot is no longer empty (different key), break retry loop
+            break;
+          }
+        }
+
+        if (claimed) {
           break;
         }
-        // else: Another thread claimed this slot with a different key
-        // Continue searching in current bucket
+        // Failed to claim after retries, continue searching in current bucket
       }
     }
 
@@ -92,10 +115,42 @@ __kernel void b4(__global const uint *R_rids, __global const uint *bucket_ids,
   for (int i = 0; i < MAX_RIDS_PER_KEY; i++) {
     int tmp = bucket_key_offset * MAX_RIDS_PER_KEY + i;
     if (bucket_key_rids[tmp] == 0xffffffffu) {
-      uint old_val = atomic_cmpxchg(&bucket_key_rids[tmp], 0xffffffffu, rid);
-      if (old_val == 0xffffffffu) {
+      // Found empty slot, try to claim it with retry mechanism
+      // Instead of atomic_cmpxchg, use retry loop with verification
+      bool claimed = false;
+      const int max_retries = 10; // Maximum retry attempts
+
+      for (int retry = 0; retry < max_retries; retry++) {
+        // Double-check: read again to ensure slot is still empty
+        uint check_rid = bucket_key_rids[tmp];
+
+        if (check_rid == rid) {
+          // Another thread inserted our rid
+          claimed = true;
+          break;
+        } else if (check_rid == 0xffffffffu) {
+          // Slot is still empty, try to write our rid
+          bucket_key_rids[tmp] = rid;
+
+          // Verify: read back to check if we successfully claimed it
+          uint verify_rid = bucket_key_rids[tmp];
+
+          if (verify_rid == rid) {
+            // Successfully claimed this slot
+            claimed = true;
+            break;
+          }
+          // else: Another thread wrote a different rid, retry
+        } else {
+          // Slot is no longer empty (different rid), break retry loop
+          break;
+        }
+      }
+
+      if (claimed) {
         return;
       }
+      // Failed to claim after retries, continue to next slot
     }
   }
 }

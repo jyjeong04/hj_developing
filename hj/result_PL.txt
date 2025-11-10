@@ -2,131 +2,131 @@
 
 === PL Optimization ===
 Build: CPU-only
-Build time: 373 ms
+Build time: 257 ms
 
 GPU ratio: 0
 
 GPU ratio: 2
-p1 time: 6.2
-p3 time: 75
-p4 time: 171
+p1 time: 7
+p3 time: 74.3
+p4 time: 168.7
 
 GPU ratio: 4
 p1 time: 6.3
-p3 time: 75.9
-p4 time: 171.4
+p3 time: 74.3
+p4 time: 169.8
 
 GPU ratio: 6
-p1 time: 7
-p3 time: 78.5
-p4 time: 173.9
+p1 time: 6.9
+p3 time: 76.3
+p4 time: 170.8
 
 GPU ratio: 8
 p1 time: 7
-p3 time: 78.2
-p4 time: 173
+p3 time: 77.1
+p4 time: 170.8
 
 GPU ratio: 10
-p1 time: 7
-p3 time: 78.4
-p4 time: 174.5
+p1 time: 7.1
+p3 time: 77.5
+p4 time: 172.4
 
 GPU ratio: 12
 p1 time: 7.1
-p3 time: 79.8
-p4 time: 175
+p3 time: 80.4
+p4 time: 174.2
 
 GPU ratio: 14
 p1 time: 7.2
-p3 time: 80.5
-p4 time: 175.4
+p3 time: 80.3
+p4 time: 173.6
 
 GPU ratio: 16
-p1 time: 7.2
-p3 time: 80.9
-p4 time: 176.8
+p1 time: 7.1
+p3 time: 81.7
+p4 time: 175.2
 
 GPU ratio: 18
-p1 time: 7.7
-p3 time: 82.4
-p4 time: 177.5
+p1 time: 7.5
+p3 time: 82.2
+p4 time: 176.2
 
 GPU ratio: 20
 p1 time: 8
-p3 time: 82.3
-p4 time: 177.2
+p3 time: 83
+p4 time: 176.7
 
 GPU ratio: 22
 p1 time: 8
-p3 time: 82.6
-p4 time: 176.7
+p3 time: 84.7
+p4 time: 178
 
 GPU ratio: 24
 p1 time: 8.1
-p3 time: 86.5
-p4 time: 179.4
+p3 time: 85.6
+p4 time: 177.3
 
 GPU ratio: 26
-p1 time: 8.2
-p3 time: 87.6
-p4 time: 179
+p1 time: 8
+p3 time: 87.2
+p4 time: 177.5
 
 GPU ratio: 28
-p1 time: 8
-p3 time: 89.3
-p4 time: 178.9
+p1 time: 8.1
+p3 time: 89.7
+p4 time: 178.4
 
 GPU ratio: 30
 p1 time: 8.1
 p3 time: 91.4
-p4 time: 179.5
+p4 time: 178.4
 
 GPU ratio: 32
-p1 time: 8.2
-p3 time: 93
-p4 time: 180.3
+p1 time: 8.3
+p3 time: 93.8
+p4 time: 180.7
 
 GPU ratio: 34
-p1 time: 8.3
-p3 time: 95.3
-p4 time: 181.7
+p1 time: 9
+p3 time: 94.9
+p4 time: 180.9
 
 GPU ratio: 36
-p1 time: 9.1
-p3 time: 97.5
-p4 time: 183.1
+p1 time: 9
+p3 time: 97.7
+p4 time: 182.4
 
 GPU ratio: 38
 p1 time: 9
-p3 time: 99.3
-p4 time: 183.4
+p3 time: 99.4
+p4 time: 183.3
 
 GPU ratio: 40
-p1 time: 9
-p3 time: 101.1
+p1 time: 9.1
+p3 time: 101
 p4 time: 184.7
 
 GPU ratio: 42
 p1 time: 9
-p3 time: 103.5
-p4 time: 185.4
+p3 time: 102.5
+p4 time: 184.8
 
 GPU ratio: 44
 p1 time: 9
-p3 time: 105.1
-p4 time: 186.8
+p3 time: 104.8
+p4 time: 186
 
 GPU ratio: 46
 p1 time: 9
-p3 time: 107.2
-p4 time: 188.7
+p3 time: 106.2
+p4 time: 186.3
 
 GPU ratio: 48
-p1 time: 9
-p3 time: 109.2
-p4 time: 189.2
+p1 time: 9.3
+p3 time: 108.4
+p4 time: 188.3
 
 GPU ratio: 50
-p1 time: 9
-p3 time: 111.2
-p4 time: 190.4
+p1 time: 9.2
+p3 time: 110.5
+p4 time: 189.4
